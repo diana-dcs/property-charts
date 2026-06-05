@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-chart-plugin",
+  "name": "Chart Plugin",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Visualize frontmatter data from your notes as interactive charts.",
+  "author": "Diana",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}

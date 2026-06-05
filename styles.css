@@ -1,0 +1,239 @@
+/* ============================================================
+   Chart Plugin — Styles
+   ============================================================ */
+
+/*
+  Obsidian's .view-content already has a constrained height (flex:1 in the
+  leaf layout). We only need to: stop it from scrolling, reset its padding,
+  and let our inner flex column take over.
+*/
+.workspace-leaf-content[data-type="chart-plugin-view"] .view-content {
+  overflow: hidden;
+  padding: 0;
+}
+
+/* Root flex column: controls on top, canvas fills the rest */
+.chart-plugin-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Controls panel ──────────────────────────────────────── */
+
+.chart-plugin-controls {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* Individual section */
+.chart-plugin-section {
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.chart-plugin-section:last-child {
+  border-bottom: none;
+}
+
+.chart-plugin-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+
+/* Row inside a section */
+.chart-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.chart-plugin-row:last-child {
+  margin-bottom: 0;
+}
+
+.chart-plugin-row--end {
+  justify-content: flex-end;
+}
+
+.chart-plugin-row label {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 56px;
+  flex-shrink: 0;
+}
+
+.chart-plugin-row .dropdown {
+  flex: 1;
+  font-size: 12px;
+  min-width: 0;
+}
+
+/* ── Toggle button group (chart type, range presets) ─────── */
+
+.chart-plugin-btn-group {
+  display: flex;
+  gap: 3px;
+}
+
+.chart-plugin-toggle-btn {
+  padding: 2px 9px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.chart-plugin-toggle-btn:hover {
+  border-color: var(--interactive-accent);
+  color: var(--text-normal);
+}
+
+.chart-plugin-toggle-btn.active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* Date inputs */
+.chart-plugin-date-input {
+  flex: 1;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+/* Add dataset button */
+.chart-plugin-add-btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 0;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px dashed var(--background-modifier-border);
+  color: var(--text-muted);
+  transition: all 0.12s;
+}
+
+.chart-plugin-add-btn:hover {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+  border-style: solid;
+}
+
+/* Remove dataset button */
+.chart-plugin-remove-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 50%;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: all 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chart-plugin-remove-btn:hover {
+  border-color: var(--text-error);
+  color: var(--text-error);
+}
+
+/* ── Actions bar (copy button) ───────────────────────────── */
+
+.chart-plugin-actions {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.chart-plugin-copy-btn {
+  width: 100%;
+  padding: 5px 0;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  transition: background 0.12s;
+}
+
+.chart-plugin-copy-btn:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.chart-plugin-copy-btn.copied {
+  background: var(--color-green, #4caf50);
+}
+
+/* ── Canvas area ─────────────────────────────────────────── */
+
+.chart-plugin-canvas-container {
+  flex: 1;
+  min-height: 0;   /* required for flex children to shrink below content height */
+  padding: 12px;
+  position: relative;
+}
+
+.chart-plugin-canvas-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ============================================================
+   Embedded code-block charts
+   ============================================================ */
+
+.chart-plugin-embed {
+  margin: 16px 0;
+}
+
+.chart-plugin-embed .chart-plugin-canvas-container {
+  height: 300px;
+  padding: 0;
+}
+
+/* ── Heatmap ─────────────────────────────────────────────── */
+
+/*
+  The fixed-size wrapper sits inside .chart-plugin-canvas-container.
+  The existing "canvas { width: 100%; height: 100% }" rule then fills
+  exactly the wrapper dimensions, not the outer container — this keeps
+  cells square at the GitHub-standard 11×11 px regardless of sidebar width.
+*/
+.chart-plugin-heatmap-wrapper {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ── Error messages ──────────────────────────────────────── */
+
+.chart-plugin-error {
+  color: var(--text-error);
+  font-size: 13px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--text-error);
+  background: var(--background-modifier-error);
+  border-radius: 4px;
+}
