@@ -1,5 +1,6 @@
 module.exports = {
   testEnvironment: "node",
+  setupFiles: ["./jest.setup.ts"],
   moduleNameMapper: {
     "^obsidian$": "<rootDir>/__mocks__/obsidian.ts",
     "^chart.js/auto$": "<rootDir>/__mocks__/chart.js.ts",

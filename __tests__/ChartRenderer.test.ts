@@ -2,7 +2,18 @@ import { ChartRenderer } from "../src/ChartRenderer";
 import { ChartConfig, Dataset } from "../src/types";
 import moment from "moment";
 
-(global as any).window = { moment };
+// Some chart types read Obsidian CSS variables from the DOM at render time.
+// Provide minimal stubs so the node test environment does not throw.
+beforeAll(() => {
+  (global as any).document = { body: {} };
+  (global as any).getComputedStyle = () => ({
+    getPropertyValue: () => "#333",
+  });
+});
+afterAll(() => {
+  delete (global as any).document;
+  delete (global as any).getComputedStyle;
+});
 
 // Minimal DOM stub used by ChartRenderer
 function makeContainer(): HTMLElement {
@@ -21,6 +32,7 @@ function makeConfig(overrides: Partial<ChartConfig> = {}): ChartConfig {
     type: "line",
     folder: "Daily Notes",
     properties: ["mood"],
+    colors: [],
     dateFormat: "YYYY-MM-DD",
     range: { preset: "all" },
     ...overrides,
@@ -33,6 +45,7 @@ function makeDataset(property: string, values: number[], dates: string[]): Datas
     valueType: "number",
     points: values.map((v, i) => ({
       date: moment(dates[i], "YYYY-MM-DD").toDate(),
+      label: dates[i],
       value: v,
       rawValue: v,
     })),
@@ -45,6 +58,7 @@ function makeTextDataset(property: string, values: string[], dates: string[]): D
     valueType: "text",
     points: values.map((v, i) => ({
       date: moment(dates[i], "YYYY-MM-DD").toDate(),
+      label: dates[i],
       value: v,
       rawValue: v,
     })),
@@ -98,6 +112,40 @@ describe("ChartRenderer", () => {
         makeTextDataset("mood", ["good", "bad"], ["2024-01-10", "2024-01-11"]),
         makeTextDataset("energy", ["high", "good"], ["2024-01-10", "2024-01-11"]),
       ];
+      await expect(renderer.render(config, datasets)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("render — distribution charts", () => {
+    it.each(["pie", "doughnut", "polarArea"] as const)(
+      "renders a %s chart without throwing",
+      async (type) => {
+        const container = makeContainer();
+        const renderer = new ChartRenderer(container);
+        const config = makeConfig({ type });
+        const datasets = [makeDataset("mood", [3, 5, 2], ["2024-01-10", "2024-01-11", "2024-01-12"])];
+        await expect(renderer.render(config, datasets)).resolves.toBeUndefined();
+      }
+    );
+
+    it("renders a distribution chart with multiple datasets without throwing", async () => {
+      const container = makeContainer();
+      const renderer = new ChartRenderer(container);
+      const config = makeConfig({ type: "pie", properties: ["mood", "sleep"] });
+      const datasets = [
+        makeDataset("mood", [7, 8, 6], ["2024-01-10", "2024-01-11", "2024-01-12"]),
+        makeDataset("sleep", [6, 7, 8], ["2024-01-10", "2024-01-11", "2024-01-12"]),
+      ];
+      await expect(renderer.render(config, datasets)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("render — heatmap", () => {
+    it("returns early without throwing for all-text heatmap datasets", async () => {
+      const container = makeContainer();
+      const renderer = new ChartRenderer(container);
+      const config = makeConfig({ type: "heatmap" });
+      const datasets = [makeTextDataset("mood", ["good", "bad"], ["2024-01-10", "2024-01-11"])];
       await expect(renderer.render(config, datasets)).resolves.toBeUndefined();
     });
   });

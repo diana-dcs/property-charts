@@ -1,4 +1,4 @@
-import { Plugin, PluginSettingTab, App, Setting, WorkspaceLeaf } from "obsidian";
+import { AbstractInputSuggest, Plugin, PluginSettingTab, App, Setting, TFile, TFolder, WorkspaceLeaf, debounce } from "obsidian";
 import { VIEW_TYPE_CHART, ChartView } from "./src/ChartView";
 import { CodeBlockProcessor } from "./src/CodeBlockProcessor";
 import { ChartType, DEFAULT_SETTINGS, PluginSettings, RangePreset } from "./src/types";
@@ -39,29 +39,31 @@ export default class ChartPlugin extends Plugin {
       callback: () => this.activateView(),
     });
 
-    // Auto-refresh on metadata changes (vault file modified)
-    this.registerEvent(
-      this.app.metadataCache.on("changed", (file) => {
-        this.refreshViews();
-      })
-    );
-
-    this.registerEvent(
-      this.app.vault.on("create", () => {
-        this.refreshViews();
-      })
-    );
-
-    this.registerEvent(
-      this.app.vault.on("delete", () => {
-        this.refreshViews();
-      })
-    );
+    // Defer event listeners until after Obsidian finishes loading the workspace.
+    // Registering vault.on("create") earlier causes it to fire for every file
+    // during startup, which would trigger refreshViews() hundreds of times.
+    this.app.workspace.onLayoutReady(() => {
+      this.registerEvent(
+        this.app.metadataCache.on("changed", (file) => {
+          this.codeBlockProcessor.clearPropertyCache(file.path);
+          this.refreshViews(file);
+        })
+      );
+      this.registerEvent(
+        this.app.vault.on("create", (file) => {
+          if (file instanceof TFile) this.refreshViews(file);
+        })
+      );
+      this.registerEvent(
+        this.app.vault.on("delete", (file) => {
+          this.codeBlockProcessor.pruneStaleEntries();
+          if (file instanceof TFile) this.refreshViews(file);
+        })
+      );
+    });
   }
 
-  async onunload(): Promise<void> {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHART);
-  }
+  onunload(): void {}
 
   private async activateView(): Promise<void> {
     const { workspace } = this.app;
@@ -80,6 +82,7 @@ export default class ChartPlugin extends Plugin {
   }
 
   applySettingsToViews(): void {
+    this.codeBlockProcessor.updateSettings(this.settings);
     this.app.workspace.getLeavesOfType(VIEW_TYPE_CHART).forEach((leaf) => {
       if (leaf.view instanceof ChartView) {
         leaf.view.onSettingsChanged(this.settings);
@@ -87,16 +90,20 @@ export default class ChartPlugin extends Plugin {
     });
   }
 
-  private refreshViews(): void {
+  private refreshViews(file?: TFile): void {
     this.app.workspace.getLeavesOfType(VIEW_TYPE_CHART).forEach((leaf) => {
       if (leaf.view instanceof ChartView) {
-        leaf.view.scheduleRefresh();
+        if (!file) {
+          leaf.view.scheduleRefresh();
+          return;
+        }
+        const folder = leaf.view.getFolder();
+        const prefix = folder === "/" ? "" : folder + "/";
+        if (file.path.startsWith(prefix)) leaf.view.scheduleRefresh();
       }
     });
 
-    // Embedded charts are re-rendered by Obsidian automatically when the
-    // markdown post-processor re-runs; we just clear the renderer cache
-    this.codeBlockProcessor.scheduleRefreshAll();
+    this.codeBlockProcessor.scheduleRefreshAll(file?.path);
   }
 
   async loadSettings(): Promise<void> {
@@ -117,19 +124,28 @@ class ChartPluginSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl)
+    const folderSetting = new Setting(containerEl)
       .setName("Default folder")
-      .setDesc("Folder pre-selected when the sidebar view opens.")
-      .addText((text) =>
-        text
-          .setPlaceholder("e.g. Daily Notes")
-          .setValue(this.plugin.settings.defaultFolder)
-          .onChange(async (value) => {
-            this.plugin.settings.defaultFolder = value;
-            await this.plugin.saveSettings();
-            this.plugin.applySettingsToViews();
-          })
-      );
+      .setDesc("Folder pre-selected when the sidebar view opens.");
+
+    folderSetting.addText((text) => {
+      text
+        .setPlaceholder("Search folders…")
+        .setValue(this.plugin.settings.defaultFolder);
+
+      new FolderSuggest(this.app, text.inputEl, (folder) => {
+        this.plugin.settings.defaultFolder = folder;
+        this.plugin.saveSettings();
+        this.plugin.applySettingsToViews();
+        text.setValue(folder);
+      });
+
+      text.onChange(async (value) => {
+        this.plugin.settings.defaultFolder = value;
+        await this.plugin.saveSettings();
+        this.plugin.applySettingsToViews();
+      });
+    });
 
     new Setting(containerEl)
       .setName("Date format")
@@ -148,7 +164,14 @@ class ChartPluginSettingTab extends PluginSettingTab {
       .setName("Default chart type")
       .addDropdown((drop) =>
         drop
-          .addOptions({ line: "Line", bar: "Bar" })
+          .addOptions({
+            line: "Line",
+            bar: "Bar",
+            heatmap: "Heatmap",
+            pie: "Pie",
+            doughnut: "Doughnut",
+            polarArea: "Polar Area",
+          })
           .setValue(this.plugin.settings.defaultChartType)
           .onChange(async (value) => {
             this.plugin.settings.defaultChartType = value as ChartType;
@@ -167,5 +190,52 @@ class ChartPluginSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("File limit per chart")
+      .setDesc("Maximum number of files processed per chart. A banner appears when the limit is exceeded. Set to 0 for no limit.")
+      .addText((text) =>
+        text
+          .setPlaceholder("5000")
+          .setValue(String(this.plugin.settings.fileLimit))
+          .onChange(debounce(async (value) => {
+            const parsed = parseInt(value, 10);
+            this.plugin.settings.fileLimit = (!isNaN(parsed) && parsed >= 0) ? parsed : 5000;
+            await this.plugin.saveSettings();
+            this.plugin.applySettingsToViews();
+          }, 500, true))
+      );
+  }
+}
+
+class FolderSuggest extends AbstractInputSuggest<string> {
+  private cb: (folder: string) => void;
+
+  constructor(app: App, inputEl: HTMLInputElement, cb: (folder: string) => void) {
+    super(app, inputEl);
+    this.cb = cb;
+  }
+
+  getSuggestions(query: string): string[] {
+    const folders: string[] = [];
+    const recurse = (folder: TFolder) => {
+      folders.push(folder.path === "/" ? "/" : folder.path);
+      for (const child of folder.children) {
+        if (child instanceof TFolder) recurse(child);
+      }
+    };
+    recurse(this.app.vault.getRoot());
+
+    const lower = query.toLowerCase();
+    return folders.filter((f) => f.toLowerCase().includes(lower)).slice(0, 50);
+  }
+
+  renderSuggestion(folder: string, el: HTMLElement): void {
+    el.setText(folder);
+  }
+
+  selectSuggestion(folder: string): void {
+    this.cb(folder);
+    this.close();
   }
 }

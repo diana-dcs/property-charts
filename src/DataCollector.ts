@@ -3,16 +3,37 @@ import {
   ChartConfig,
   DataPoint,
   Dataset,
+  PluginSettings,
   PropertyValueType,
   RangeConfig,
 } from "./types";
 
 export class DataCollector {
   private propertiesCache = new Map<string, string[]>();
+  private dateCache = new Map<string, Date | null>();
 
-  constructor(private app: App) {
-    // Invalidate cache when any file's metadata changes
-    this.app.metadataCache.on("changed", () => this.propertiesCache.clear());
+  constructor(private app: App, private settings: PluginSettings) {}
+
+  updateSettings(settings: PluginSettings): void {
+    this.settings = settings;
+  }
+
+  clearPropertyCache(filePath?: string): void {
+    if (!filePath) {
+      this.propertiesCache.clear();
+      this.dateCache.clear();
+      return;
+    }
+    for (const folder of this.propertiesCache.keys()) {
+      const prefix = folder === "/" ? "" : folder + "/";
+      if (filePath.startsWith(prefix)) {
+        this.propertiesCache.delete(folder);
+      }
+    }
+    const datePrefix = filePath + ":";
+    for (const key of this.dateCache.keys()) {
+      if (key.startsWith(datePrefix)) this.dateCache.delete(key);
+    }
   }
 
   getAllFolders(): string[] {
@@ -37,9 +58,15 @@ export class DataCollector {
 
     if (!folder) return [];
 
-    return folder.children
-      .filter((f): f is TFile => f instanceof TFile && f.extension === "md")
-      .sort((a, b) => a.basename.localeCompare(b.basename));
+    const files: TFile[] = [];
+    const collect = (f: TFolder) => {
+      for (const child of f.children) {
+        if (child instanceof TFile && child.extension === "md") files.push(child);
+        else if (child instanceof TFolder) collect(child);
+      }
+    };
+    collect(folder);
+    return files.sort((a, b) => a.basename.localeCompare(b.basename));
   }
 
   getPropertiesInFolder(folderPath: string): string[] {
@@ -63,8 +90,12 @@ export class DataCollector {
     return result;
   }
 
-  async collectDatasets(config: ChartConfig): Promise<Dataset[]> {
+  async collectDatasets(config: ChartConfig, limitOverride = false): Promise<Dataset[]> {
     const files = this.getFilesInFolder(config.folder);
+    const limit = (!limitOverride && this.settings.fileLimit > 0)
+      ? this.settings.fileLimit
+      : Infinity;
+
     const datasets: Dataset[] = config.properties.map((prop) => ({
       property: prop,
       points: [],
@@ -72,25 +103,42 @@ export class DataCollector {
     }));
 
     const { from: fromStr, to: toStr } = this.resolveRange(config.range);
+    const hasRangeFilter = fromStr !== null || toStr !== null;
+
+    let collected = 0;
+    let truncated = false;
 
     for (const file of files) {
       const date = this.resolveDate(file, config.dateFormat);
-      if (!date) continue;
 
-      // Both sides use moment's local-time formatting, so timezone is consistent.
-      const dateStr = window.moment(date).format("YYYY-MM-DD");
-      if (fromStr && dateStr < fromStr) continue;
-      if (toStr && dateStr > toStr) continue;
+      if (date) {
+        // Dated file: apply the range filter.
+        const dateStr = window.moment(date).format("YYYY-MM-DD");
+        if (fromStr && dateStr < fromStr) continue;
+        if (toStr && dateStr > toStr) continue;
+      } else if (hasRangeFilter) {
+        // Undated file: no temporal position — exclude whenever a range is active.
+        // Only "all" (no filter) includes undated files.
+        continue;
+      }
 
       const cache = this.app.metadataCache.getFileCache(file);
       if (!cache?.frontmatter) continue;
 
+      if (collected >= limit) {
+        truncated = true;
+        break;
+      }
+      collected++;
+
       for (const dataset of datasets) {
+        if (!Object.prototype.hasOwnProperty.call(cache.frontmatter, dataset.property)) continue;
         const raw = cache.frontmatter[dataset.property];
         if (raw === undefined || raw === null) continue;
 
         const point: DataPoint = {
           date,
+          label: file.basename,
           rawValue: raw,
           value: this.normalizeValue(raw),
         };
@@ -103,15 +151,39 @@ export class DataCollector {
       }
     }
 
-    // Sort all datasets by date
+    // Sort: dated files chronologically first, then undated files alphabetically
     for (const dataset of datasets) {
-      dataset.points.sort((a, b) => a.date.getTime() - b.date.getTime());
+      dataset.points.sort((a, b) => {
+        if (a.date && b.date) return a.date.getTime() - b.date.getTime();
+        if (a.date) return -1;
+        if (b.date) return 1;
+        return a.label.localeCompare(b.label);
+      });
+      dataset.truncated = truncated;
+      dataset.totalCount = files.length;
     }
 
     return datasets;
   }
 
+  private static readonly FALLBACK_DATE_FORMATS = [
+    "YYYY-MM-DD",
+    "YYYY/MM/DD",
+    "DD.MM.YYYY",
+    "MM/DD/YYYY",
+    "YYYYMMDD",
+  ];
+
   private resolveDate(file: TFile, dateFormat: string): Date | null {
+    const cacheKey = file.path + ":" + dateFormat;
+    if (this.dateCache.has(cacheKey)) return this.dateCache.get(cacheKey)!;
+
+    const result = this.computeDate(file, dateFormat);
+    this.dateCache.set(cacheKey, result);
+    return result;
+  }
+
+  private computeDate(file: TFile, dateFormat: string): Date | null {
     const cache = this.app.metadataCache.getFileCache(file);
 
     // 1. Try frontmatter 'date' property
@@ -119,16 +191,24 @@ export class DataCollector {
       const parsed = window.moment(cache.frontmatter.date, dateFormat, true);
       if (parsed.isValid()) return parsed.toDate();
 
-      // Try common formats as fallback
-      const fallback = window.moment(cache.frontmatter.date);
+      // Try common formats as strict fallback (no lenient parse)
+      const fallback = window.moment(
+        cache.frontmatter.date,
+        DataCollector.FALLBACK_DATE_FORMATS,
+        true,
+      );
       if (fallback.isValid()) return fallback.toDate();
     }
 
-    // 2. Try filename with configured format, then fall back to auto-detection
+    // 2. Try filename with configured format, then common formats — always strict
     const parsed = window.moment(file.basename, dateFormat, true);
     if (parsed.isValid()) return parsed.toDate();
 
-    const filenameFallback = window.moment(file.basename);
+    const filenameFallback = window.moment(
+      file.basename,
+      DataCollector.FALLBACK_DATE_FORMATS,
+      true,
+    );
     if (filenameFallback.isValid()) return filenameFallback.toDate();
 
     return null;
@@ -160,17 +240,28 @@ export class DataCollector {
   }
 
   private normalizeValue(raw: unknown): number | string | boolean | null {
-    if (typeof raw === "number") return raw;
+    if (typeof raw === "number") {
+      if (!isFinite(raw)) return null;
+      return raw;
+    }
     if (typeof raw === "boolean") return raw ? 1 : 0;
     if (typeof raw === "string") {
       const num = parseFloat(raw);
-      if (!isNaN(num)) return num;
-      return raw;
+      if (!isNaN(num)) {
+        // parseFloat("Infinity") → Infinity: reject non-finite parsed numbers
+        return isFinite(num) ? num : null;
+      }
+      if (raw.trim() !== "") return raw;
+      return null;
     }
     return null;
   }
 
   private inferValueType(raw: unknown): PropertyValueType {
+    if (Array.isArray(raw)) {
+      // List properties: use the first element to determine the type.
+      return raw.length > 0 ? this.inferValueType(raw[0]) : "number";
+    }
     if (typeof raw === "boolean") return "boolean";
     if (typeof raw === "number") {
       if (Number.isInteger(raw) && raw >= 1 && raw <= 10) return "rating";
@@ -180,6 +271,18 @@ export class DataCollector {
       const num = parseFloat(raw);
       if (!isNaN(num)) return "number";
       return "text";
+    }
+    return "number";
+  }
+
+  /** Samples the first available value of a property to infer its type without a full collection. */
+  getPropertyType(folderPath: string, property: string): PropertyValueType {
+    for (const file of this.getFilesInFolder(folderPath)) {
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (!cache?.frontmatter) continue;
+      if (!Object.prototype.hasOwnProperty.call(cache.frontmatter, property)) continue;
+      const raw = cache.frontmatter[property];
+      if (raw !== undefined && raw !== null) return this.inferValueType(raw);
     }
     return "number";
   }

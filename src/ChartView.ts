@@ -1,5 +1,5 @@
 import { ItemView, WorkspaceLeaf, debounce } from "obsidian";
-import { ChartConfig, CHART_COLORS_HEX, CSS, PluginSettings } from "./types";
+import { ChartConfig, Dataset, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, PluginSettings, RangePreset, stripWikiLinks } from "./types";
 import { computeHeatmapDimensions, HEATMAP_WRAPPER_W } from "./HeatmapRenderer";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
@@ -8,6 +8,7 @@ import {
   populateFolderSelect,
   rebuildPropertySelects,
   updateHeatmapButton,
+  updateDistributionButtons,
   ControlRefs,
 } from "./ChartViewControls";
 
@@ -22,10 +23,16 @@ export class ChartView extends ItemView {
   private datasets: string[] = [""];
   private heatmapYear: number = new Date().getFullYear();
   private yearNavContainer: HTMLElement | null = null;
+  private segmentColorSection: HTMLElement | null = null;
+  private segmentLabels: string[] = [];
+  private limitOverride = false;
+  private limitBanner: HTMLElement | null = null;
+  private bannerContainer: HTMLElement;
+  private emptyStateEl: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, private settings: PluginSettings) {
     super(leaf);
-    this.collector = new DataCollector(this.app);
+    this.collector = new DataCollector(this.app, settings);
     this.config = {
       type: settings.defaultChartType,
       folder: settings.defaultFolder,
@@ -39,22 +46,25 @@ export class ChartView extends ItemView {
   getViewType(): string { return VIEW_TYPE_CHART; }
   getDisplayText(): string { return "Chart"; }
   getIcon(): string { return "bar-chart-2"; }
+  getFolder(): string { return this.config.folder; }
 
   async onOpen(): Promise<void> {
     const root = this.contentEl;
     root.addClass(CSS.view);
 
     // Settings area: scrolls internally when many datasets are added
-    const scrollArea = root.createDiv();
-    scrollArea.style.overflowY = "auto";
-    scrollArea.style.maxHeight = "45vh";
+    const scrollArea = root.createDiv({ cls: CSS.scrollArea });
 
     this.controlRefs = buildControls(scrollArea, this.config, this.datasets, this.collector, {
       onRefresh: () => this.refresh(),
       onRebuildPropertySelects: () => this.rebuildPropertySelects(),
-      onCopyCodeblock: (btn) => this.copyCodeblock(btn),
+      onReset: () => this.resetConfig(),
     });
     this.rebuildPropertySelects();
+
+    // Segment color section – populated dynamically when a distribution type is active.
+    this.segmentColorSection = scrollArea.createDiv({ cls: CSS.section });
+    this.segmentColorSection.style.display = "none";
 
     // Button directly below settings, same horizontal inset as sections
     const actionsBar = root.createDiv({ cls: CSS.actions });
@@ -62,14 +72,13 @@ export class ChartView extends ItemView {
     copyBtn.onclick = () => this.copyCodeblock(copyBtn);
 
     // Year navigator for heatmap (hidden when type is not heatmap)
-    this.yearNavContainer = root.createDiv();
-    this.yearNavContainer.style.cssText =
-      "display:none; align-items:center; justify-content:center; gap:0.5em; padding:4px 0;";
+    this.yearNavContainer = root.createDiv({ cls: CSS.yearNav });
     const prevYearBtn = this.yearNavContainer.createEl("button", { text: "←", cls: CSS.toggleBtn });
+    prevYearBtn.setAttribute("aria-label", "Vorheriges Jahr");
     const yearLabel = this.yearNavContainer.createEl("span");
-    yearLabel.style.cssText = "min-width:4ch; text-align:center; font-weight:500;";
     yearLabel.setText(String(this.heatmapYear));
     const nextYearBtn = this.yearNavContainer.createEl("button", { text: "→", cls: CSS.toggleBtn });
+    nextYearBtn.setAttribute("aria-label", "Nächstes Jahr");
     prevYearBtn.onclick = async () => {
       this.heatmapYear--;
       yearLabel.setText(String(this.heatmapYear));
@@ -81,10 +90,16 @@ export class ChartView extends ItemView {
       await this.refresh();
     };
 
+    // Slot for empty-state guidance (no folder / no property selected)
+    this.emptyStateEl = root.createDiv({ cls: CSS.noDataMsg });
+    this.emptyStateEl.style.display = "none";
+
+    // Banner slot above the chart (shown when file limit is exceeded)
+    this.bannerContainer = root.createDiv();
+
     // Chart below button with a fixed height
     this.chartContainer = root.createDiv({ cls: CSS.canvasContainer });
     this.chartContainer.style.height = "300px";
-    this.renderer = new ChartRenderer(this.chartContainer);
 
     this.registerEvent(
       this.app.metadataCache.on("resolved", () => {
@@ -92,9 +107,7 @@ export class ChartView extends ItemView {
       })
     );
 
-    if (this.config.folder && this.config.properties[0]) {
-      await this.refresh();
-    }
+    await this.refresh();
   }
 
   async onClose(): Promise<void> {
@@ -107,6 +120,7 @@ export class ChartView extends ItemView {
 
   onSettingsChanged(settings: PluginSettings): void {
     this.settings = settings;
+    this.collector.updateSettings(settings);
     if (!this.config.folder && settings.defaultFolder) {
       this.config.folder = settings.defaultFolder;
       if (this.controlRefs) {
@@ -127,11 +141,26 @@ export class ChartView extends ItemView {
       {
         onRefresh: () => this.refresh(),
         onRebuildPropertySelects: () => this.rebuildPropertySelects(),
-        onCopyCodeblock: (btn) => this.copyCodeblock(btn),
+        onReset: () => this.resetConfig(),
       }
     );
     const activeCount = this.config.properties.filter(Boolean).length;
     updateHeatmapButton(this.controlRefs, activeCount, this.config.type);
+    updateDistributionButtons(this.controlRefs, activeCount, this.config.type, activeCount > 0);
+  }
+
+  private resetConfig(): void {
+    this.config.type = this.settings.defaultChartType;
+    this.config.properties = [""];
+    this.config.colors = [CHART_COLORS_HEX[0]];
+    this.config.dateFormat = this.settings.defaultDateFormat;
+    this.config.range = { preset: this.settings.defaultRange };
+    this.datasets.length = 0;
+    this.datasets.push("");
+    this.heatmapYear = new Date().getFullYear();
+    this.limitOverride = false;
+    this.rebuildPropertySelects();
+    this.refresh();
   }
 
   private copyCodeblock(btn: HTMLButtonElement): void {
@@ -139,23 +168,32 @@ export class ChartView extends ItemView {
       .map((p, i) => (p ? i : -1))
       .filter((i) => i >= 0);
     const activeProps = activeIndices.map((i) => this.config.properties[i]);
-    const activeColors = activeIndices.map((i) => this.config.colors[i]);
+
+    // For distribution types, export per-segment colors instead of per-dataset colors.
+    const isDistribution = DISTRIBUTION_TYPES.includes(this.config.type);
+    const exportColors = isDistribution
+      ? this.segmentLabels.map(
+          (_, i) => this.config.colors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length]
+        )
+      : activeIndices.map((i) => this.config.colors[i]);
 
     const propYaml =
       activeProps.length === 1
-        ? `property: ${activeProps[0]}`
-        : `property:\n${activeProps.map((p) => `  - ${p}`).join("\n")}`;
+        ? `property: ${yamlQuote(activeProps[0])}`
+        : `property:\n${activeProps.map((p) => `  - ${yamlQuote(p)}`).join("\n")}`;
 
     const colorsYaml =
-      activeColors.length === 1
-        ? `colors: "${activeColors[0]}"`
-        : `colors:\n${activeColors.map((c) => `  - "${c}"`).join("\n")}`;
+      exportColors.length === 1
+        ? `colors: "${exportColors[0]}"`
+        : `colors:\n${exportColors.map((c) => `  - "${c}"`).join("\n")}`;
 
     let rangeYaml = "";
-    if (this.config.range.preset) {
-      rangeYaml = `range: ${this.config.range.preset}`;
-    } else if (this.config.range.from && this.config.range.to) {
-      rangeYaml = `range: ${this.config.range.from}:${this.config.range.to}`;
+    if (!DISTRIBUTION_TYPES.includes(this.config.type)) {
+      if (this.config.range.preset) {
+        rangeYaml = `range: ${this.config.range.preset}`;
+      } else if (this.config.range.from && this.config.range.to) {
+        rangeYaml = `range: ${this.config.range.from}:${this.config.range.to}`;
+      }
     }
 
     const yearYaml = this.config.type === "heatmap"
@@ -165,7 +203,7 @@ export class ChartView extends ItemView {
     const block = [
       "```chart",
       `type: ${this.config.type}`,
-      `folder: ${this.config.folder}`,
+      `folder: ${yamlQuote(this.config.folder)}`,
       propYaml,
       colorsYaml,
       `dateFormat: ${this.config.dateFormat}`,
@@ -188,64 +226,289 @@ export class ChartView extends ItemView {
   }
 
   async refresh(): Promise<void> {
-    if (!this.renderer || !this.config.folder) return;
-    const activeProperties = this.config.properties.filter(Boolean);
-    if (activeProperties.length === 0) return;
+    if (!this.chartContainer) return;
 
+    const activeProperties = this.config.properties.filter(Boolean);
     const isHeatmap = this.config.type === "heatmap";
-    if (this.yearNavContainer) {
-      this.yearNavContainer.style.display = isHeatmap ? "flex" : "none";
+    const isDistribution = DISTRIBUTION_TYPES.includes(this.config.type);
+    const hasActiveProperty = activeProperties.length > 0;
+
+    this.syncEarlyControlState(isHeatmap, hasActiveProperty);
+    if (!hasActiveProperty || !this.config.folder) {
+      this.rebuildSegmentColorSection([]);
+      this.renderer?.destroy();
+      this.renderer = null;
+      this.chartContainer.empty();
+      this.chartContainer.style.display = "none";
+      this.bannerContainer.empty();
+      this.limitBanner = null;
+      const emptyMsg = !this.config.folder
+        ? "Select a folder to get started."
+        : "Select a property to create a chart.";
+      this.emptyStateEl.setText(emptyMsg);
+      this.emptyStateEl.style.display = "flex";
+      if (this.controlRefs?.dataHint) {
+        this.controlRefs.dataHint.setText(emptyMsg);
+        this.controlRefs.dataHint.style.display = "";
+      }
+      return;
     }
-    // Pre-size the container so there's no height jump during async data collection.
+
+    if (this.controlRefs?.dataHint) {
+      this.controlRefs.dataHint.style.display = "none";
+    }
+
+    this.emptyStateEl.style.display = "none";
+    this.chartContainer.style.display = "";
+
     if (isHeatmap) {
       const { totalH } = computeHeatmapDimensions(HEATMAP_WRAPPER_W);
       this.chartContainer.style.height = `${totalH}px`;
     } else {
       this.chartContainer.style.height = "300px";
     }
-    // Keep hint in sync when type switches (e.g. via codeblock re-render)
+
+    this.chartContainer.addClass("is-loading");
+    this.chartContainer.setAttribute("aria-busy", "true");
+    try {
+      const configToRender: ChartConfig = { ...this.config, properties: activeProperties };
+      const datasets = await this.collectChartData(configToRender, isHeatmap, isDistribution);
+      this.syncControlState(datasets, configToRender, isHeatmap, isDistribution);
+      await this.renderChartData(configToRender, datasets, isHeatmap);
+    } catch (e) {
+      console.error("Chart Plugin: render error", e);
+      this.chartContainer.empty();
+      this.chartContainer.createEl("p", {
+        text: `Fehler beim Rendern des Charts: ${(e as Error).message}`,
+        cls: CSS.error,
+      });
+    } finally {
+      this.chartContainer.removeClass("is-loading");
+      this.chartContainer.removeAttribute("aria-busy");
+    }
+  }
+
+  private syncEarlyControlState(isHeatmap: boolean, hasActiveProperty: boolean): void {
+    if (this.yearNavContainer) {
+      this.yearNavContainer.style.display = isHeatmap ? "flex" : "none";
+    }
     if (this.controlRefs) {
       const activeCount = this.config.properties.filter(Boolean).length;
       updateHeatmapButton(this.controlRefs, activeCount, this.config.type);
-    }
-
-    try {
-      const configToRender: ChartConfig = { ...this.config, properties: activeProperties };
-
-      // For heatmap, collect the full year's data; range is used only for graying
-      let collectConfig = configToRender;
-      if (isHeatmap) {
-        collectConfig = {
-          ...configToRender,
-          heatmapYear: this.heatmapYear,
-          range: {
-            from: `${this.heatmapYear}-01-01`,
-            to: `${this.heatmapYear}-12-31`,
-          },
-        };
-      }
-
-      const datasets = await this.collector.collectDatasets(collectConfig);
-      this.renderer.destroy();
-      this.chartContainer.empty();
-
-      const hasData = datasets.some((d) => d.points.length > 0);
-      if (!hasData && !isHeatmap) {
-        const msg = this.chartContainer.createEl("p", {
-          text: `No data found. Check the time range and that your date format (${configToRender.dateFormat}) matches your filenames.`,
-        });
-        msg.style.cssText = "color: var(--text-muted); padding: 1em; font-size: 0.9em;";
-        this.renderer = new ChartRenderer(this.chartContainer);
-        return;
-      }
-
-      this.renderer = new ChartRenderer(this.chartContainer);
-      const renderConfig = isHeatmap
-        ? { ...configToRender, heatmapYear: this.heatmapYear }
-        : configToRender;
-      await this.renderer.render(renderConfig, datasets);
-    } catch (e) {
-      console.error("Chart Plugin: render error", e);
+      updateDistributionButtons(this.controlRefs, activeCount, this.config.type, hasActiveProperty);
     }
   }
+
+  private async collectChartData(
+    configToRender: ChartConfig,
+    isHeatmap: boolean,
+    isDistribution: boolean,
+  ): Promise<Dataset[]> {
+    let collectConfig = configToRender;
+    if (isHeatmap) {
+      collectConfig = {
+        ...configToRender,
+        heatmapYear: this.heatmapYear,
+        range: {
+          from: `${this.heatmapYear}-01-01`,
+          to: `${this.heatmapYear}-12-31`,
+        },
+      };
+    } else if (isDistribution) {
+      collectConfig = { ...configToRender, range: { preset: "all" as RangePreset } };
+    }
+
+    let datasets = await this.collector.collectDatasets(collectConfig, this.limitOverride);
+
+    // For line/bar: if the range filter produced no data, try a full (unfiltered)
+    // collection to see whether the property is text-typed. If it is, use that data
+    // for the frequency chart. If it is numeric, keep the empty result.
+    if (!isHeatmap && !isDistribution && !datasets.some((d) => d.points.length > 0)) {
+      const fallback = await this.collector.collectDatasets({
+        ...configToRender,
+        range: { preset: "all" as RangePreset },
+      });
+      if (
+        fallback.some((d) => d.points.length > 0) &&
+        fallback.every((d) => d.valueType === "text")
+      ) {
+        datasets = fallback;
+      }
+    }
+
+    return datasets;
+  }
+
+  private syncControlState(
+    datasets: Dataset[],
+    configToRender: ChartConfig,
+    isHeatmap: boolean,
+    isDistribution: boolean,
+  ): void {
+    const allPropsAreText =
+      !isHeatmap && !isDistribution &&
+      datasets.length > 0 &&
+      datasets.every((d) => d.valueType === "text");
+
+    const isTextProperty =
+      datasets.some((d) => d.points.length > 0) &&
+      datasets.every((d) => d.valueType === "text");
+
+    const hasAnyPoints = datasets.some((d) => d.points.length > 0);
+    const hasDates =
+      !isTextProperty &&
+      (!hasAnyPoints || datasets.some((d) => d.points.some((p) => p.date !== null)));
+
+    if (isDistribution && datasets[0]) {
+      const seen = new Set<string>();
+      for (const point of datasets[0].points) {
+        if (point.rawValue === null || point.rawValue === undefined) continue;
+        const vals = Array.isArray(point.rawValue)
+          ? (point.rawValue as unknown[]).map(String)
+          : [String(point.rawValue)];
+        for (const val of vals) seen.add(val);
+      }
+      this.rebuildSegmentColorSection([...seen].sort().map(stripWikiLinks));
+    } else {
+      this.rebuildSegmentColorSection([]);
+    }
+
+    if (this.controlRefs) {
+      const activeCount = this.config.properties.filter(Boolean).length;
+      updateHeatmapButton(this.controlRefs, activeCount, this.config.type, isTextProperty, hasDates);
+    }
+
+    if (this.controlRefs?.rangeSection && !isHeatmap && !isDistribution) {
+      this.controlRefs.rangeSection.style.display = !allPropsAreText ? "" : "none";
+    }
+
+    if (this.controlRefs?.dataHint) {
+      const hint = this.controlRefs.dataHint;
+      if (isHeatmap && allPropsAreText) {
+        hint.setText("Heatmap requires numeric or boolean values. Text values are not supported.");
+        hint.style.display = "";
+      } else if (!isHeatmap && !isDistribution && allPropsAreText) {
+        hint.setText("Text values detected — showing as frequency chart instead of time series.");
+        hint.style.display = "";
+      } else {
+        hint.style.display = "none";
+      }
+    }
+  }
+
+  private async renderChartData(
+    configToRender: ChartConfig,
+    datasets: Dataset[],
+    isHeatmap: boolean,
+  ): Promise<void> {
+    this.renderer?.destroy();
+    this.renderer = null;
+    this.chartContainer.empty();
+
+    const hasData = datasets.some((d) => d.points.length > 0);
+    if (!hasData && !isHeatmap) {
+      this.chartContainer.createEl("p", {
+        text: `No data found. Check the time range and that your date format (${configToRender.dateFormat}) matches your filenames.`,
+        cls: CSS.noDataMsg,
+      });
+      // renderer bleibt als bereits-zerstörter Renderer stehen (canvas ist aus dem DOM
+      // entfernt). Der nächste refresh()-Aufruf räumt ihn korrekt auf, ohne dass die
+      // Guard-Bedingung (if (!this.renderer) return) greift.
+      return;
+    }
+
+    this.renderer = new ChartRenderer(this.chartContainer);
+    const renderConfig = isHeatmap
+      ? { ...configToRender, heatmapYear: this.heatmapYear }
+      : configToRender;
+    await this.renderer.render(renderConfig, datasets);
+    this.renderer.updateAriaLabel(renderConfig);
+
+    this.bannerContainer.empty();
+    this.limitBanner = null;
+    const anyTruncated = datasets.find((d) => d.truncated);
+    const totalCount = datasets.find((d) => d.totalCount !== undefined)?.totalCount ?? 0;
+    if (anyTruncated) {
+      this.limitBanner = this.bannerContainer.createDiv();
+      renderLimitStatusChip(this.limitBanner, "truncated", totalCount, this.settings.fileLimit, async () => {
+        this.limitOverride = true;
+        await this.refresh();
+      });
+    } else if (this.limitOverride && totalCount > 0) {
+      this.limitBanner = this.bannerContainer.createDiv();
+      renderLimitStatusChip(this.limitBanner, "overridden", totalCount, this.settings.fileLimit, async () => {
+        this.limitOverride = false;
+        await this.refresh();
+      });
+    }
+  }
+
+  private rebuildSegmentColorSection(labels: string[]): void {
+    const section = this.segmentColorSection;
+    if (!section) return;
+
+    this.segmentLabels = labels;
+    section.empty();
+
+    if (labels.length === 0) {
+      section.style.display = "none";
+      return;
+    }
+
+    section.style.display = "";
+    section.createDiv({ cls: CSS.sectionTitle, text: "Segment colors" });
+
+    labels.forEach((label, i) => {
+      const row = section.createDiv({ cls: CSS.row });
+
+      const colorInput = row.createEl("input", { type: "color", cls: CSS.colorInput });
+      colorInput.value =
+        this.config.colors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length];
+
+      row.createEl("label", { text: label });
+
+      // Use onchange only so the chart re-renders after the picker is closed,
+      // preventing the picker from closing mid-selection.
+      colorInput.onchange = async () => {
+        this.config.colors[i] = colorInput.value;
+        await this.refresh();
+      };
+    });
+  }
+}
+
+function renderLimitStatusChip(
+  container: HTMLElement,
+  state: "truncated" | "overridden",
+  totalCount: number,
+  limit: number,
+  onToggle: () => Promise<void>
+): void {
+  if (state === "truncated") {
+    container.addClass("chart-plugin-limit-banner");
+    container.createEl("span", {
+      text: `${limit.toLocaleString()} of ${totalCount.toLocaleString()} files loaded.`,
+    });
+    const btn = container.createEl("button");
+    btn.setText("Load all");
+    btn.onclick = () => onToggle();
+  } else {
+    container.addClass("chart-plugin-limit-chip");
+    container.createEl("span", {
+      text: `All ${totalCount.toLocaleString()} files loaded.`,
+    });
+    const btn = container.createEl("button");
+    btn.setText("Apply limit");
+    btn.onclick = () => onToggle();
+  }
+}
+
+function yamlQuote(value: string): string {
+  return `"${value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+  }"`;
 }

@@ -1,10 +1,12 @@
-import { Chart, ChartConfiguration, ChartDataset, ChartType as ChartJsType } from "chart.js/auto";
+import { Chart, ChartConfiguration, ChartDataset, ChartType as ChartJsType, Plugin } from "chart.js/auto";
 
 import {
   ChartConfig,
   ChartType,
   CHART_COLORS_HEX,
+  DISTRIBUTION_TYPES,
   Dataset,
+  stripWikiLinks,
 } from "./types";
 import { renderHeatmap, renderHeatmapLegend, HEATMAP_WRAPPER_W, computeHeatmapDimensions } from "./HeatmapRenderer";
 
@@ -19,9 +21,22 @@ export class ChartRenderer {
     this.canvas = container.createEl("canvas");
   }
 
+  updateAriaLabel(config: ChartConfig): void {
+    const props = config.properties.filter(Boolean).join(", ");
+    const label = `${config.type}-Chart: „${props || "—"}" in Ordner „${config.folder || "—"}"`;
+    this.canvas.setAttribute("role", "img");
+    this.canvas.setAttribute("aria-label", label);
+  }
+
   async render(config: ChartConfig, datasets: Dataset[]): Promise<void> {
     if (config.type === "heatmap") {
-      this.renderHeatmapChart(config, datasets);
+      const isTextOnly = datasets.every((d) => d.valueType === "text");
+      if (isTextOnly) return; // hint shown in sidebar by ChartView
+      await this.renderHeatmapChart(config, datasets);
+      return;
+    }
+    if (DISTRIBUTION_TYPES.includes(config.type)) {
+      this.renderDistributionChart(config, datasets);
       return;
     }
     const isTextOnly = datasets.every((d) => d.valueType === "text");
@@ -32,7 +47,7 @@ export class ChartRenderer {
     }
   }
 
-  private renderHeatmapChart(config: ChartConfig, datasets: Dataset[]): void {
+  private async renderHeatmapChart(config: ChartConfig, datasets: Dataset[]): Promise<void> {
     const dataset = datasets[0];
     if (!dataset) return;
 
@@ -42,8 +57,13 @@ export class ChartRenderer {
     this.canvas.style.display = "none";
 
     // Embed: fit to container width (no scroll). Sidebar: fixed width, scrolls horizontally.
+    // Defer the width read to after layout so clientWidth is non-zero on first render.
     const availW = this.responsiveHeatmap
-      ? (this.container.clientWidth || HEATMAP_WRAPPER_W)
+      ? await new Promise<number>((resolve) =>
+          requestAnimationFrame(() =>
+            resolve(this.container.clientWidth || HEATMAP_WRAPPER_W)
+          )
+        )
       : HEATMAP_WRAPPER_W;
     const { wrapperH, totalH } = computeHeatmapDimensions(availW);
 
@@ -65,10 +85,12 @@ export class ChartRenderer {
 
     const year = config.heatmapYear ?? new Date().getFullYear();
     const isBool = dataset.valueType === "boolean";
-    const points = dataset.points.map((p) => ({
-      date: window.moment(p.date).format("YYYY-MM-DD"),
-      value: p.value as number | boolean | null,
-    }));
+    const points = dataset.points
+      .filter((p) => p.date !== null)
+      .map((p) => ({
+        date: window.moment(p.date!).format("YYYY-MM-DD"),
+        value: p.value as number | boolean | null,
+      }));
     this.chart = renderHeatmap(canvas, points, color, year, config.range, isBool);
   }
 
@@ -77,17 +99,16 @@ export class ChartRenderer {
   }
 
   private renderTimeSeriesChart(config: ChartConfig, datasets: Dataset[]): void {
-    const labels = this.buildLabels(datasets, config.dateFormat);
+    const labels = this.buildLabels(datasets);
 
     const chartDatasets: ChartDataset[] = datasets.map((dataset, i) => {
       const hex = this.resolveColor(config, i);
       const fill = this.hexToRgba(hex, 0.8);
       const border = this.hexToRgba(hex, 1);
 
+      const pointMap = new Map(dataset.points.map((p) => [p.label, p]));
       const data = labels.map((label) => {
-        const point = dataset.points.find(
-          (p) => this.formatDate(p.date, config.dateFormat) === label
-        );
+        const point = pointMap.get(label);
         return point ? (point.value as number) : null;
       });
 
@@ -132,20 +153,25 @@ export class ChartRenderer {
     const freqMaps = datasets.map((dataset) => {
       const freq: Record<string, number> = {};
       for (const point of dataset.points) {
-        const val = String(point.rawValue);
-        freq[val] = (freq[val] ?? 0) + 1;
-        allLabels.add(val);
+        const vals = Array.isArray(point.rawValue)
+          ? (point.rawValue as unknown[]).map(String)
+          : [String(point.rawValue)];
+        for (const val of vals) {
+          freq[val] = (freq[val] ?? 0) + 1;
+          allLabels.add(val);
+        }
       }
       return freq;
     });
 
-    const labels = Array.from(allLabels).sort();
+    const rawKeys = Array.from(allLabels).sort();
+    const labels = rawKeys.map(stripWikiLinks);
 
     const chartDatasets: ChartDataset[] = datasets.map((dataset, i) => {
       const hex = this.resolveColor(config, i);
       return {
         label: dataset.property,
-        data: labels.map((l) => freqMaps[i][l] ?? 0),
+        data: rawKeys.map((k) => freqMaps[i][k] ?? 0),
         backgroundColor: this.hexToRgba(hex, 0.8),
         borderColor: this.hexToRgba(hex, 1),
         borderWidth: 2,
@@ -153,7 +179,7 @@ export class ChartRenderer {
     });
 
     const cfg: ChartConfiguration = {
-      type: "bar",
+      type: config.type === "line" ? "line" : "bar",
       data: { labels, datasets: chartDatasets },
       options: {
         responsive: true,
@@ -161,6 +187,115 @@ export class ChartRenderer {
         plugins: { legend: { display: datasets.length > 1 } },
         scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
       },
+    };
+
+    this.chart = new Chart(this.canvas, cfg);
+  }
+
+  private renderDistributionChart(config: ChartConfig, datasets: Dataset[]): void {
+    const dataset = datasets[0];
+    if (!dataset) return;
+
+    const freq: Record<string, number> = {};
+    for (const point of dataset.points) {
+      if (point.rawValue === null || point.rawValue === undefined) continue;
+      const vals = Array.isArray(point.rawValue)
+        ? (point.rawValue as unknown[]).map(String)
+        : [String(point.rawValue)];
+      for (const val of vals) {
+        freq[val] = (freq[val] ?? 0) + 1;
+      }
+    }
+
+    const rawKeys = Object.keys(freq).sort();
+    const labels = rawKeys.map(stripWikiLinks);
+    const data = rawKeys.map((k) => freq[k]);
+    const total = data.reduce((s, v) => s + v, 0);
+
+    const isPolarArea = config.type === "polarArea";
+    const bgAlpha = isPolarArea ? 0.6 : 0.85;
+
+    const bgColors = labels.map((_, i) =>
+      this.hexToRgba(config.colors?.[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length], bgAlpha)
+    );
+    const borderColors = labels.map((_, i) =>
+      this.hexToRgba(config.colors?.[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length], isPolarArea ? 0.5 : 1)
+    );
+
+    const chartDataset: ChartDataset = {
+      label: dataset.property,
+      data,
+      backgroundColor: bgColors,
+      borderColor: borderColors,
+      borderWidth: isPolarArea ? 1 : 2,
+    };
+
+    const instancePlugins: Plugin[] = [];
+    if (config.type === "doughnut") {
+      instancePlugins.push({
+        id: "doughnutCenter",
+        afterDraw(chart: Chart) {
+          const { ctx, chartArea } = chart;
+          if (!chartArea) return;
+          const cx = (chartArea.left + chartArea.right) / 2;
+          const cy = (chartArea.top + chartArea.bottom) / 2;
+          ctx.save();
+          ctx.font = "bold 1.4em sans-serif";
+          ctx.fillStyle =
+            getComputedStyle(document.body).getPropertyValue("--text-normal") || "#333";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(total), cx, cy);
+          ctx.restore();
+        },
+      } as Plugin);
+    }
+
+    // For polarArea: move legend to bottom (gives the circle more square space),
+    // and adapt scale colors for dark-mode compatibility.
+    const mutedColor =
+      getComputedStyle(document.body).getPropertyValue("--text-muted").trim() ||
+      "rgba(160,160,160,0.9)";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const polarAreaScales: any = isPolarArea
+      ? {
+          r: {
+            grid: { color: "rgba(128,128,128,0.25)" },
+            ticks: {
+              backdropColor: "rgba(0,0,0,0)",
+              backdropPadding: 0,
+              color: mutedColor,
+            },
+          },
+        }
+      : undefined;
+
+    const cfg: ChartConfiguration = {
+      type: config.type as ChartJsType,
+      data: { labels, datasets: [chartDataset] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: isPolarArea ? { padding: 8 } : undefined,
+        plugins: {
+          legend: { display: true, position: isPolarArea ? "bottom" : "right" },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                // polarArea stores parsed value as {r: number}, pie/doughnut as a number.
+                const raw = ctx.parsed as number | { r: number };
+                const val = typeof raw === "object" && raw !== null ? raw.r : raw;
+                const pct = total > 0 ? Math.round((val / total) * 100) : 0;
+                return ` ${ctx.label}: ${val} (${pct}%)`;
+              },
+            },
+          },
+        },
+        ...(polarAreaScales ? { scales: polarAreaScales } : {}),
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      plugins: instancePlugins as any,
     };
 
     this.chart = new Chart(this.canvas, cfg);
@@ -174,18 +309,18 @@ export class ChartRenderer {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
-  private buildLabels(datasets: Dataset[], dateFormat: string): string[] {
-    const dateSet = new Set<string>();
+  private buildLabels(datasets: Dataset[]): string[] {
+    const seen = new Set<string>();
+    const labels: string[] = [];
     for (const dataset of datasets) {
       for (const point of dataset.points) {
-        dateSet.add(this.formatDate(point.date, dateFormat));
+        if (!seen.has(point.label)) {
+          seen.add(point.label);
+          labels.push(point.label);
+        }
       }
     }
-    return Array.from(dateSet).sort();
-  }
-
-  private formatDate(date: Date, format: string): string {
-    return window.moment(date).format(format);
+    return labels;
   }
 
   private mapChartType(type: ChartType): ChartJsType {

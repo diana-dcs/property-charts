@@ -36,6 +36,13 @@
   border-bottom: none;
 }
 
+.chart-plugin-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
 .chart-plugin-section-title {
   font-size: 10px;
   font-weight: 700;
@@ -48,7 +55,7 @@
 /* Row inside a section */
 .chart-plugin-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   margin-bottom: 5px;
 }
@@ -78,6 +85,7 @@
 
 .chart-plugin-btn-group {
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
 }
 
@@ -113,6 +121,36 @@
   border: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
   color: var(--text-normal);
+}
+
+/* Shared style for all informational hint texts */
+.chart-plugin-data-hint,
+.chart-plugin-hint,
+.chart-plugin-no-data-msg,
+.chart-plugin-date-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.chart-plugin-no-data-msg {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5em 1em;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: normal;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.chart-plugin-date-error {
+  color: var(--text-error);
+  font-style: normal;
 }
 
 /* Add dataset button */
@@ -187,6 +225,32 @@
   background: var(--color-green, #4caf50);
 }
 
+.chart-plugin-section-title-row .chart-plugin-reset-btn {
+  padding: 0;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  background: none;
+  box-shadow: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  line-height: 1;
+  text-decoration: underline;
+  transition: color 0.12s;
+}
+
+.chart-plugin-section-title-row .chart-plugin-reset-btn:hover {
+  color: var(--text-muted);
+}
+
+/* ── Date input validation ───────────────────────────────── */
+
+input[type="date"].is-invalid {
+  border-color: var(--color-red, #e05252) !important;
+  outline: 1px solid var(--color-red, #e05252);
+}
+
 /* ── Canvas area ─────────────────────────────────────────── */
 
 .chart-plugin-canvas-container {
@@ -199,6 +263,12 @@
 .chart-plugin-canvas-container canvas {
   width: 100% !important;
   height: 100% !important;
+}
+
+.chart-plugin-canvas-container.is-loading {
+  opacity: 0.45;
+  cursor: wait;
+  transition: opacity 0.15s;
 }
 
 /* ============================================================
@@ -225,6 +295,124 @@
 .chart-plugin-heatmap-wrapper {
   display: block;
   flex-shrink: 0;
+}
+
+/* ── File limit banner ───────────────────────────────────── */
+
+.chart-plugin-limit-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  margin: 0 12px;
+  border: 1px solid var(--text-error);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-error);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.chart-plugin-limit-banner span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chart-plugin-limit-banner button {
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--text-error);
+  color: var(--text-error);
+  transition: all 0.12s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chart-plugin-limit-banner:hover {
+  opacity: 1;
+}
+
+.chart-plugin-limit-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  margin: 0 12px;
+  border: 1px solid var(--color-green);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--color-green);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.chart-plugin-limit-chip span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chart-plugin-limit-chip button {
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--color-green);
+  color: var(--color-green);
+  transition: all 0.12s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chart-plugin-limit-chip:hover {
+  opacity: 1;
+}
+
+/* ── Scroll area (settings panel) ───────────────────────── */
+
+.chart-plugin-scroll-area {
+  overflow-y: auto;
+  max-height: 45vh;
+}
+
+/* ── Year navigator (heatmap) ────────────────────────────── */
+
+.chart-plugin-year-nav {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  padding: 4px 0;
+}
+
+.chart-plugin-year-nav span {
+  min-width: 4ch;
+  text-align: center;
+  font-weight: 500;
+}
+
+/* ── Inline hints (heatmap / distribution disabled notices) ─ */
+
+.chart-plugin-hint {
+  display: none;
+}
+
+/* ── Invisible spacer replacing the remove button ───────── */
+
+.chart-plugin-btn-spacer {
+  display: inline-block;
+  visibility: hidden;
+  flex-shrink: 0;
+  width: 22px;
 }
 
 /* ── Error messages ──────────────────────────────────────── */

@@ -1,5 +1,6 @@
-import { Chart } from "chart.js/auto";
+import { Chart, ChartConfiguration, ScriptableContext } from "chart.js/auto";
 import { MatrixController, MatrixElement } from "chartjs-chart-matrix";
+import type { MatrixDataPoint } from "chartjs-chart-matrix";
 import { RangeConfig } from "./types";
 
 Chart.register(MatrixController, MatrixElement);
@@ -147,13 +148,16 @@ export function renderHeatmap(
     return lerpRgba(emptyRgb[0], emptyRgb[1], emptyRgb[2], dataRgb[0], dataRgb[1], dataRgb[2], t, opacity);
   }
 
-  return new Chart(canvas, {
-    type: "matrix" as any,
+  const cfg: ChartConfiguration<'matrix'> = {
+    type: "matrix",
     data: {
       datasets: [{
         label: "",
-        data: gridData as any,
-        backgroundColor(ctx: any) {
+        // GridPoint satisfies MatrixDataPoint (x, y, v) and carries extra fields
+        // accessible via ctx.raw — the cast is unavoidable because MatrixDataPoint
+        // declares v as optional while GridPoint uses number | null.
+        data: gridData as unknown as MatrixDataPoint[],
+        backgroundColor(ctx: ScriptableContext<'matrix'>) {
           const pt = ctx.raw as GridPoint;
           return cellColor(pt, isInRange(pt.date) ? 1 : 0.15);
         },
@@ -161,9 +165,9 @@ export function renderHeatmap(
         borderWidth: 1,
         borderRadius: 2,
         // Both dimensions derived from chart area WIDTH → always square cells
-        width:  ({ chart }: any) => Math.max(Math.floor((chart.chartArea?.width  ?? NUM_WEEKS*PITCH) / NUM_WEEKS) - GAP, 4),
-        height: ({ chart }: any) => Math.max(Math.floor((chart.chartArea?.width  ?? NUM_WEEKS*PITCH) / NUM_WEEKS) - GAP, 4),
-      } as any],
+        width:  ({ chart }: ScriptableContext<'matrix'>) => Math.max(Math.floor((chart.chartArea?.width  ?? NUM_WEEKS*PITCH) / NUM_WEEKS) - GAP, 4),
+        height: ({ chart }: ScriptableContext<'matrix'>) => Math.max(Math.floor((chart.chartArea?.width  ?? NUM_WEEKS*PITCH) / NUM_WEEKS) - GAP, 4),
+      }],
     },
     options: {
       responsive: true,
@@ -173,8 +177,8 @@ export function renderHeatmap(
         legend: { display: false },
         tooltip: {
           callbacks: {
-            title(items: any[]) { return (items[0]?.raw as GridPoint)?.date ?? ""; },
-            label(item: any) {
+            title(items) { return (items[0]?.raw as GridPoint)?.date ?? ""; },
+            label(item) {
               const pt = item.raw as GridPoint;
               if (!pt.inYear || pt.v === null) return "No entry";
               if (isBooleanProp) return pt.v ? "true" : "false";
@@ -225,7 +229,8 @@ export function renderHeatmap(
       },
       layout: { padding: { right: 4 } },
     },
-  });
+  };
+  return new Chart(canvas, cfg);
 }
 
 /** Appends a "Less ░▒▓█ More" legend row to the given container element. */
@@ -240,12 +245,14 @@ export function renderHeatmapLegend(
   const dataRgb = hexToRgb(colorHex) ?? [99, 132, 255];
 
   const legend = container.createDiv();
+  // Direct style assignment required — Obsidian provides no API for dynamic computed layout values.
   legend.style.cssText =
     "display:flex;align-items:center;gap:3px;justify-content:flex-end;" +
     `padding:4px ${Y_AXIS_W - 4}px 0 0;height:${LEGEND_H}px;box-sizing:border-box;`;
 
   const label = (text: string) => {
     const s = legend.createEl("span");
+    // Direct style assignment required — Obsidian provides no API for dynamic computed colors.
     s.style.cssText = "font-size:11px;color:var(--text-muted);";
     s.setText(text);
   };
@@ -255,6 +262,7 @@ export function renderHeatmapLegend(
   label("Less");
   for (const t of steps) {
     const sq = legend.createDiv();
+    // Direct style assignment required — Obsidian provides no API for dynamic computed colors.
     sq.style.cssText = `width:${CELL}px;height:${CELL}px;border-radius:2px;flex-shrink:0;`;
     const col = t === 0
       ? `rgba(${emptyRgb[0]},${emptyRgb[1]},${emptyRgb[2]},1)`

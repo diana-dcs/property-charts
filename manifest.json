@@ -1,10 +1,10 @@
 {
   "id": "obsidian-chart-plugin",
-  "name": "Chart Plugin",
+  "name": "Property Charts",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
-  "description": "Visualize frontmatter data from your notes as interactive charts.",
+  "description": "Visualize property data from your notes as interactive charts.",
   "author": "Diana",
-  "authorUrl": "",
+  "authorUrl": "https://github.com/diana-dcs",
   "isDesktopOnly": false
 }

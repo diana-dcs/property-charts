@@ -3,11 +3,13 @@
  *
  * Covers:
  * - US-06: YAML parsing, config building, range parsing
+ * - Security: injection, invalid input, boundary values
  * - Error handling for invalid/incomplete YAML
  */
 
 import { CodeBlockProcessor } from "../src/CodeBlockProcessor";
 import { DEFAULT_SETTINGS } from "../src/types";
+import * as yaml from "js-yaml";
 
 // Minimal app mock — CodeBlockProcessor only uses app.metadataCache in process(),
 // which we don't test here (requires DOM). buildConfig/parseRange are pure functions.
@@ -99,9 +101,8 @@ describe("US-06: parseRange — range string parsing", () => {
     expect(range).toEqual({ preset: DEFAULT_SETTINGS.defaultRange });
   });
 
-  test("unrecognized string falls back to 30d", () => {
-    const range = processor.parseRange("invalid");
-    expect(range).toEqual({ preset: "30d" });
+  test("unrecognized string throws an error", () => {
+    expect(() => processor.parseRange("invalid")).toThrow(/Ungültiger Bereich/);
   });
 
   test("custom range with same from and to date is valid", () => {
@@ -115,11 +116,142 @@ describe("US-06: parseRange — range string parsing", () => {
 // ============================================================
 
 describe("US-06: Chart type config", () => {
-  test.each(["line", "bar", "scatter"] as const)(
+  test.each(["line", "bar", "heatmap"] as const)(
     "chart type '%s' is accepted",
     (type) => {
       const config = processor.buildConfig({ type, folder: "Notes", property: "x" });
       expect(config.type).toBe(type);
     }
   );
+
+  test("invalid chart type throws an error", () => {
+    expect(() =>
+      processor.buildConfig({ type: "scatter" as any, folder: "Notes", property: "x" })
+    ).toThrow(/Unknown chart type/);
+  });
+});
+
+// ============================================================
+// Security: YAML & Config Injection
+// ============================================================
+
+describe("Security: YAML schema enforcement", () => {
+  test("js-yaml JSON_SCHEMA rejects !!js/function tags", () => {
+    const maliciousYaml = `type: !!js/function 'function(){ return "pwned"; }'`;
+    expect(() => yaml.load(maliciousYaml, { schema: yaml.JSON_SCHEMA })).toThrow();
+  });
+
+  test("__proto__ key in YAML does not pollute Object prototype", () => {
+    yaml.load("__proto__:\n  isAdmin: true\n", { schema: yaml.JSON_SCHEMA });
+    expect((({}) as any).isAdmin).toBeUndefined();
+  });
+
+  test("constructor key in YAML does not pollute prototype", () => {
+    yaml.load("constructor:\n  prototype:\n    isAdmin: true\n", { schema: yaml.JSON_SCHEMA });
+    expect((({}) as any).isAdmin).toBeUndefined();
+  });
+});
+
+describe("Security: dateFormat sanitization", () => {
+  test("valid format 'YYYY-MM-DD' is accepted unchanged", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", dateFormat: "YYYY-MM-DD" });
+    expect(config.dateFormat).toBe("YYYY-MM-DD");
+  });
+
+  test("format with regex metacharacters throws an error", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", dateFormat: "YYYY[.*+]{1,100}MM" })
+    ).toThrow(/Ungültiges dateFormat/);
+  });
+
+  test("format with backticks or quotes throws an error", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", dateFormat: "YYYY`MM`DD" })
+    ).toThrow(/Ungültiges dateFormat/);
+  });
+});
+
+describe("Security: parseRange — malformed date strings", () => {
+  test("non-date strings in custom range throw an error", () => {
+    expect(() => processor.parseRange("not-a-date:also-bad")).toThrow(/Ungültige Daten im Bereich/);
+  });
+
+  test("reversed range (from > to) is swapped automatically", () => {
+    const range = processor.parseRange("2024-12-31:2024-01-01");
+    expect(range).toEqual({ from: "2024-01-01", to: "2024-12-31" });
+  });
+
+  test("partial date string throws an error", () => {
+    expect(() => processor.parseRange("2024-01:")).toThrow(/Ungültige Daten im Bereich/);
+  });
+});
+
+// ============================================================
+// buildConfig: colors field, distribution types, heatmapYear
+// ============================================================
+
+describe("buildConfig — colors and distribution types", () => {
+  test("colors omitted — default chart colors are assigned per property", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: ["a", "b"] });
+    expect(config.colors).toHaveLength(2);
+    config.colors.forEach((c) => expect(typeof c).toBe("string"));
+  });
+
+  test("colors provided as array — forwarded unchanged for distribution types", () => {
+    const provided = ["#ff0000", "#00ff00", "#0000ff"];
+    const config = processor.buildConfig({ type: "pie", folder: "Notes", property: "x", colors: provided });
+    // Distribution type: raw colors are preserved as-is
+    expect(config.colors).toEqual(provided);
+  });
+
+  test("colors as single string is wrapped into an array", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", colors: "#aabbcc" as any });
+    expect(config.colors[0]).toBe("#aabbcc");
+  });
+
+  test("heatmapYear defaults to current year when not provided", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", type: "heatmap" });
+    expect(config.heatmapYear).toBe(new Date().getFullYear());
+  });
+
+  test("heatmapYear is set when provided", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", type: "heatmap", year: 2023 });
+    expect(config.heatmapYear).toBe(2023);
+  });
+});
+
+// ============================================================
+// buildConfig: all valid chart types accepted
+// ============================================================
+
+describe("buildConfig — all chart types", () => {
+  test.each(["line", "bar", "heatmap", "pie", "doughnut", "polarArea"] as const)(
+    "chart type '%s' is accepted without throwing",
+    (type) => {
+      expect(() =>
+        processor.buildConfig({ type, folder: "Notes", property: "x" })
+      ).not.toThrow();
+    }
+  );
+});
+
+// ============================================================
+// buildConfig: range edge cases at config level
+// ============================================================
+
+describe("buildConfig — range edge cases", () => {
+  test("range 'all' results in preset: all", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", range: "all" });
+    expect(config.range).toEqual({ preset: "all" });
+  });
+
+  test("custom range string is passed through parseRange correctly", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", range: "2024-01-01:2024-03-31" });
+    expect(config.range).toEqual({ from: "2024-01-01", to: "2024-03-31" });
+  });
+
+  test("null range falls back to default preset", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", range: null as any });
+    expect(config.range).toEqual({ preset: DEFAULT_SETTINGS.defaultRange });
+  });
 });

@@ -1,9 +1,14 @@
-export type ChartType = "line" | "bar" | "heatmap";
+export type ChartType = "line" | "bar" | "heatmap" | "pie" | "doughnut" | "polarArea";
+
+export const DISTRIBUTION_TYPES: ChartType[] = ["pie", "doughnut", "polarArea"];
+
+export const ALL_CHART_TYPES: ChartType[] = ["line", "bar", "heatmap", "pie", "doughnut", "polarArea"];
 
 export type PropertyValueType = "number" | "boolean" | "rating" | "text";
 
 export interface DataPoint {
-  date: Date;
+  date: Date | null;
+  label: string;
   value: number | string | boolean | null;
   rawValue: unknown;
 }
@@ -12,6 +17,8 @@ export interface Dataset {
   property: string;
   points: DataPoint[];
   valueType: PropertyValueType;
+  truncated?: boolean;
+  totalCount?: number;
 }
 
 export interface ChartConfig {
@@ -37,6 +44,7 @@ export interface PluginSettings {
   defaultDateFormat: string;
   defaultChartType: ChartType;
   defaultRange: RangePreset;
+  fileLimit: number; // 0 = unlimited
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -44,6 +52,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   defaultDateFormat: "YYYY-MM-DD",
   defaultChartType: "line",
   defaultRange: "90d",
+  fileLimit: 5000,
 };
 
 export const CHART_COLORS_HEX = [
@@ -55,12 +64,18 @@ export const CHART_COLORS_HEX = [
   "#FF9F40",
 ];
 
+/** Removes Obsidian wiki-link brackets: [[link]] → link, [[link|alias]] → alias */
+export function stripWikiLinks(s: string): string {
+  return s.replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, (_, target, alias) => alias ?? target);
+}
+
 export const CSS = {
   view: "chart-plugin-view",
   controls: "chart-plugin-controls",
   canvasContainer: "chart-plugin-canvas-container",
   section: "chart-plugin-section",
   sectionTitle: "chart-plugin-section-title",
+  sectionTitleRow: "chart-plugin-section-title-row",
   row: "chart-plugin-row",
   rowEnd: "chart-plugin-row--end",
   btnGroup: "chart-plugin-btn-group",
@@ -71,10 +86,18 @@ export const CSS = {
   dateError: "chart-plugin-date-error",
   actions: "chart-plugin-actions",
   copyBtn: "chart-plugin-copy-btn",
+  resetBtn: "chart-plugin-reset-btn",
   removeBtn: "chart-plugin-remove-btn",
   colorInput: "chart-plugin-color-input",
+  dataHint: "chart-plugin-data-hint",
+  disabledHint: "chart-plugin-disabled-hint",
   bottom: "chart-plugin-bottom",
   embed: "chart-plugin-embed",
   error: "chart-plugin-error",
+  scrollArea: "chart-plugin-scroll-area",
+  yearNav: "chart-plugin-year-nav",
+  hint: "chart-plugin-hint",
+  noDataMsg: "chart-plugin-no-data-msg",
+  btnSpacer: "chart-plugin-btn-spacer",
 } as const;
 

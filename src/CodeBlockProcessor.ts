@@ -1,6 +1,6 @@
 import { App, MarkdownPostProcessorContext, debounce } from "obsidian";
 import * as yaml from "js-yaml";
-import { ChartConfig, ChartType, CHART_COLORS_HEX, CSS, RangePreset, PluginSettings } from "./types";
+import { ChartConfig, ChartType, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, ALL_CHART_TYPES, RangePreset, PluginSettings } from "./types";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
 
@@ -10,7 +10,7 @@ interface CodeBlockConfig {
   property?: string | string[];
   colors?: string | string[];
   dateFormat?: string;
-  range?: string;
+  range?: unknown;
   year?: number;
 }
 
@@ -18,14 +18,18 @@ export class CodeBlockProcessor {
   private collector: DataCollector;
   private renderers: Map<HTMLElement, ChartRenderer> = new Map();
   // Stored so scheduleRefreshAll can re-render with fresh data
-  private refreshCallbacks: Map<HTMLElement, () => Promise<boolean>> = new Map();
+  private refreshCallbacks: Map<HTMLElement, { folder: string; refresh: () => Promise<boolean> }> = new Map();
 
   constructor(private app: App, private settings: PluginSettings) {
-    this.collector = new DataCollector(app);
-    this.app.vault.on("delete", () => this.pruneStaleEntries());
+    this.collector = new DataCollector(app, settings);
   }
 
-  private pruneStaleEntries(): void {
+  updateSettings(settings: PluginSettings): void {
+    this.settings = settings;
+    this.collector.updateSettings(settings);
+  }
+
+  pruneStaleEntries(): void {
     for (const [el] of this.refreshCallbacks) {
       if (!document.contains(el)) {
         this.renderers.get(el)?.destroy();
@@ -33,6 +37,10 @@ export class CodeBlockProcessor {
         this.refreshCallbacks.delete(el);
       }
     }
+  }
+
+  clearPropertyCache(filePath?: string): void {
+    this.collector.clearPropertyCache(filePath);
   }
 
   async process(
@@ -44,14 +52,17 @@ export class CodeBlockProcessor {
 
     let raw: CodeBlockConfig;
     try {
-      const parsed = yaml.load(source);
+      if (source.length > 10_000) {
+        throw new Error("Config exceeds 10 000 character limit");
+      }
+      const parsed = yaml.load(source, { schema: yaml.JSON_SCHEMA });
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
         throw new Error("Chart config must be a YAML mapping");
       }
       raw = parsed as CodeBlockConfig;
     } catch (e) {
       el.createEl("p", {
-        text: `Chart Plugin: Invalid YAML — ${(e as Error).message}`,
+        text: `Ungültige YAML-Konfiguration: ${(e as Error).message} — Überprüfe Einrückung und Anführungszeichen.`,
         cls: CSS.error,
       });
       return;
@@ -61,7 +72,7 @@ export class CodeBlockProcessor {
 
     if (!config.folder) {
       el.createEl("p", {
-        text: "Chart Plugin: 'folder' is required.",
+        text: `Pflichtfeld fehlt: Füge folder: "Pfad/zum/Ordner" zur Chart-Konfiguration hinzu.`,
         cls: CSS.error,
       });
       return;
@@ -69,17 +80,18 @@ export class CodeBlockProcessor {
 
     if (config.properties.length === 0 || !config.properties[0]) {
       el.createEl("p", {
-        text: "Chart Plugin: 'property' is required.",
+        text: `Pflichtfeld fehlt: Füge property: "eigenschaft" zur Chart-Konfiguration hinzu.`,
         cls: CSS.error,
       });
       return;
     }
 
     const container = el.createDiv({ cls: CSS.canvasContainer });
+    const limitOverride = true; // embedded codeblocks always load all files
 
     const render = async (): Promise<boolean> => {
       try {
-        // For heatmap, collect the full year's data; range is used only for cell graying
+        // For heatmap, collect the full year's data; for distribution, collect all notes.
         const collectConfig = config.type === "heatmap"
           ? {
               ...config,
@@ -88,8 +100,10 @@ export class CodeBlockProcessor {
                 to: `${config.heatmapYear ?? new Date().getFullYear()}-12-31`,
               },
             }
+          : DISTRIBUTION_TYPES.includes(config.type)
+          ? { ...config, range: { preset: "all" as RangePreset } }
           : config;
-        const datasets = await this.collector.collectDatasets(collectConfig);
+        const datasets = await this.collector.collectDatasets(collectConfig, limitOverride);
         const hasData = datasets.some((d) => d.points.length > 0);
         if (!hasData && config.type !== "heatmap") {
           container.empty();
@@ -108,6 +122,7 @@ export class CodeBlockProcessor {
 
         const renderer = new ChartRenderer(container, true);
         await renderer.render(config, datasets);
+        renderer.updateAriaLabel(config);
         this.renderers.set(el, renderer);
         return true;
       } catch (e) {
@@ -121,7 +136,7 @@ export class CodeBlockProcessor {
     };
 
     // Store the render callback so scheduleRefreshAll can re-render (not just destroy)
-    this.refreshCallbacks.set(el, render);
+    this.refreshCallbacks.set(el, { folder: config.folder, refresh: render });
 
     const rendered = await render();
 
@@ -143,17 +158,22 @@ export class CodeBlockProcessor {
   }
 
   // Re-render all embedded charts with fresh data (called on vault changes)
-  readonly scheduleRefreshAll = debounce(async () => {
-    for (const [el, refresh] of this.refreshCallbacks) {
-      // Skip stale entries where the element is no longer in the DOM
+  readonly scheduleRefreshAll = debounce(async (changedFilePath?: string) => {
+    const toRefresh: Array<() => Promise<boolean>> = [];
+    for (const [el, entry] of this.refreshCallbacks) {
       if (!document.contains(el)) {
         this.refreshCallbacks.delete(el);
         this.renderers.get(el)?.destroy();
         this.renderers.delete(el);
         continue;
       }
-      await refresh();
+      if (changedFilePath) {
+        const prefix = entry.folder === "/" ? "" : entry.folder + "/";
+        if (!changedFilePath.startsWith(prefix)) continue;
+      }
+      toRefresh.push(entry.refresh);
     }
+    await Promise.all(toRefresh.map((refresh) => refresh()));
   }, 500, true);
 
   buildConfig(raw: CodeBlockConfig): ChartConfig {
@@ -170,37 +190,60 @@ export class CodeBlockProcessor {
       : raw.colors
       ? [raw.colors]
       : [];
-    const colors = properties.map(
-      (_, i) => rawColors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length]
-    );
 
-    const type: ChartType = (raw.type ?? this.settings.defaultChartType) as ChartType;
+    const rawType = raw.type ?? this.settings.defaultChartType;
+    if (!ALL_CHART_TYPES.includes(rawType as ChartType)) {
+      throw new Error(`Unknown chart type "${rawType}". Must be one of: ${ALL_CHART_TYPES.join(", ")}`);
+    }
+    const type = rawType as ChartType;
+
+    // For distribution types, colors map to segments (not to datasets), so preserve all
+    // raw colors. For other types, map 1:1 to properties.
+    const colors = DISTRIBUTION_TYPES.includes(type) && rawColors.length > 0
+      ? rawColors
+      : properties.map((_, i) => rawColors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length]);
 
     return {
       type,
       folder: raw.folder ?? this.settings.defaultFolder,
       properties,
       colors,
-      dateFormat: raw.dateFormat ?? this.settings.defaultDateFormat,
+      dateFormat: this.sanitizeDateFormat(raw.dateFormat ?? this.settings.defaultDateFormat),
       range,
       heatmapYear: raw.year ?? new Date().getFullYear(),
     };
   }
 
-  parseRange(range?: string): ChartConfig["range"] {
-    if (!range) return { preset: this.settings.defaultRange };
+  private sanitizeDateFormat(format: string): string {
+    // Allow only moment.js format tokens and common separators; reject anything else
+    // to prevent ReDoS via crafted format strings applied to every vault filename.
+    if (/^[YMDHhmsAaZXxwWQeELNkodDgG\[\] ./:_-]+$/.test(format)) return format;
+    throw new Error(`Ungültiges dateFormat "${format}". Nur moment.js-Tokens und Trennzeichen (./:_-) sind erlaubt.`);
+  }
+
+  parseRange(range?: unknown): ChartConfig["range"] {
+    if (range === undefined || range === null) return { preset: this.settings.defaultRange };
+    const rangeStr = String(range);
 
     const presets: RangePreset[] = ["7d", "30d", "90d", "all"];
-    if (presets.includes(range as RangePreset)) {
-      return { preset: range as RangePreset };
+    if (presets.includes(rangeStr as RangePreset)) {
+      return { preset: rangeStr as RangePreset };
     }
 
     // Custom range: "YYYY-MM-DD:YYYY-MM-DD"
-    const parts = range.split(":");
+    const parts = rangeStr.split(":");
     if (parts.length === 2) {
-      return { from: parts[0], to: parts[1] };
+      const fromDate = new Date(parts[0]);
+      const toDate = new Date(parts[1]);
+      if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+        throw new Error(`Ungültige Daten im Bereich "${rangeStr}". Format: JJJJ-MM-TT:JJJJ-MM-TT`);
+      }
+      const from = parts[0] <= parts[1] ? parts[0] : parts[1];
+      const to = parts[0] <= parts[1] ? parts[1] : parts[0];
+      return { from, to };
     }
 
-    return { preset: "30d" };
+    throw new Error(`Ungültiger Bereich "${rangeStr}". Gültige Werte: 7d · 30d · 90d · all · JJJJ-MM-TT:JJJJ-MM-TT`);
   }
 }
+

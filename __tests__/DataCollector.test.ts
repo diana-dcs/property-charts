@@ -10,11 +10,8 @@
 
 import { DataCollector } from "../src/DataCollector";
 import { TFile, TFolder } from "obsidian";
-import { ChartConfig } from "../src/types";
+import { ChartConfig, DEFAULT_SETTINGS } from "../src/types";
 import moment from "moment";
-
-// Make moment available as window.moment (Obsidian global)
-(global as any).window = { moment };
 
 // --- Mock factory helpers ---
 
@@ -78,7 +75,7 @@ const frontmatter: Record<string, Record<string, unknown>> = {
 };
 
 const app = makeApp(root, frontmatter);
-const collector = new DataCollector(app);
+const collector = new DataCollector(app, DEFAULT_SETTINGS);
 
 const baseConfig: ChartConfig = {
   type: "line",
@@ -159,7 +156,7 @@ describe("US-03: Date mapping via frontmatter 'date' property", () => {
       "Notes/note-abc.md": { date: "2024-03-15", value: 5 },
     };
     const appWithDate = makeApp(rootWithDate, fmWithDate);
-    const c = new DataCollector(appWithDate);
+    const c = new DataCollector(appWithDate, DEFAULT_SETTINGS);
 
     const datasets = await c.collectDatasets({
       ...baseConfig,
@@ -194,7 +191,7 @@ describe("US-03: Range filtering", () => {
       [`Daily Notes/${tenDaysAgo}.md`]: { sleep: 6 },
     };
     const recentApp = makeApp(recentRoot, recentFM);
-    const c = new DataCollector(recentApp);
+    const c = new DataCollector(recentApp, DEFAULT_SETTINGS);
 
     const datasets = await c.collectDatasets({
       ...baseConfig,
@@ -265,7 +262,7 @@ describe("US-05: Multiple properties (multiple datasets)", () => {
       "Daily Notes/2024-01-13.md": { sleep: 9 },
     };
     const a = makeApp(root, fm);
-    const c = new DataCollector(a);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
     const datasets = await c.collectDatasets(baseConfig);
     expect(datasets[0].points).toHaveLength(3);
   });
@@ -300,7 +297,7 @@ describe("Data type normalization", () => {
       "Daily Notes/2024-01-13.md": { rating: "6" },
     };
     const a = makeApp(root, fm);
-    const c = new DataCollector(a);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
     const datasets = await c.collectDatasets({ ...baseConfig, properties: ["rating"] });
     expect(datasets[0].points[0].value).toBe(8);
     expect(datasets[0].points[1].value).toBe(9.5);
@@ -314,7 +311,7 @@ describe("Data type normalization", () => {
       "Daily Notes/2024-01-13.md": { mood: "focused" },
     };
     const a = makeApp(root, fm);
-    const c = new DataCollector(a);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
     const datasets = await c.collectDatasets({ ...baseConfig, properties: ["mood"] });
     expect(datasets[0].valueType).toBe("text");
   });
@@ -327,7 +324,7 @@ describe("Data type normalization", () => {
       "Daily Notes/2024-01-13.md": { mood: "focused" },
     };
     const a = makeApp(root, fm);
-    const c = new DataCollector(a);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
     const datasets = await c.collectDatasets({ ...baseConfig, properties: ["mood"] });
     const freq = c.getTextFrequencies(datasets[0]);
     expect(freq["happy"]).toBe(2);
@@ -341,8 +338,289 @@ describe("Data type normalization", () => {
       // other files have no frontmatter at all
     };
     const a = makeApp(root, fm);
-    const c = new DataCollector(a);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
     const datasets = await c.collectDatasets(baseConfig);
     expect(datasets[0].points).toHaveLength(1);
+  });
+});
+
+// ============================================================
+// Security: Boundary values & injection attempts
+// ============================================================
+
+describe("Security: normalizeValue — boundary values", () => {
+  test("Infinity number is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: Infinity },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("-Infinity number is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: -Infinity },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("NaN number is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: NaN },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("string 'Infinity' is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: "Infinity" },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("string '-Infinity' is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: "-Infinity" },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("deeply nested object is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: { nested: { deep: 42 } } },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("array value is normalized to null", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: [1, 2, 3] },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+
+  test("numeric overflow string is treated as text (not Infinity)", async () => {
+    const bigNumber = "9".repeat(400);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { value: bigNumber },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["value"] });
+    // parseFloat("9".repeat(400)) === Infinity → must be null, not plotted
+    expect(datasets[0].points[0].value).toBeNull();
+  });
+});
+
+describe("Security: prototype pollution via property names", () => {
+  test("__proto__ property name does not pollute Object prototype", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { sleep: 7 },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    await c.collectDatasets({ ...baseConfig, properties: ["__proto__"] });
+    expect((({}) as any).polluted).toBeUndefined();
+  });
+
+  test("constructor property name does not crash", async () => {
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { sleep: 7 },
+    };
+    const a = makeApp(root, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    await expect(
+      c.collectDatasets({ ...baseConfig, properties: ["constructor"] })
+    ).resolves.toBeDefined();
+  });
+});
+
+// ============================================================
+// Date resolution: resolveDate() (via collectDatasets)
+// ============================================================
+
+describe("Date resolution: frontmatter vs filename", () => {
+  test("frontmatter 'date' field takes priority over filename", async () => {
+    // File named 2024-01-10 but frontmatter says 2024-06-15
+    const file = makeFile("Daily Notes/2024-01-10.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { sleep: 7, date: "2024-06-15" },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, folder: "Daily Notes" });
+    expect(datasets[0].points).toHaveLength(1);
+    const d = datasets[0].points[0].date!;
+    expect(d.getFullYear()).toBe(2024);
+    expect(d.getMonth()).toBe(5); // June = month index 5
+    expect(d.getDate()).toBe(15);
+  });
+
+  test("date resolved from filename when no frontmatter date field", async () => {
+    const file = makeFile("Daily Notes/2024-03-20.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-03-20.md": { mood: 8 },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({ ...baseConfig, folder: "Daily Notes", properties: ["mood"] });
+    expect(datasets[0].points).toHaveLength(1);
+    const d = datasets[0].points[0].date!;
+    expect(d.getFullYear()).toBe(2024);
+    expect(d.getMonth()).toBe(2); // March = month index 2
+    expect(d.getDate()).toBe(20);
+  });
+
+  test("custom dateFormat (DD.MM.YYYY) is used for frontmatter date", async () => {
+    const file = makeFile("Daily Notes/note.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/note.md": { mood: 5, date: "25.12.2024" },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({
+      ...baseConfig,
+      folder: "Daily Notes",
+      properties: ["mood"],
+      dateFormat: "DD.MM.YYYY",
+    });
+    expect(datasets[0].points).toHaveLength(1);
+    const d = datasets[0].points[0].date!;
+    expect(d.getFullYear()).toBe(2024);
+    expect(d.getMonth()).toBe(11); // December
+    expect(d.getDate()).toBe(25);
+  });
+
+  test("file with unparseable date has null date and is excluded by range filter", async () => {
+    const file = makeFile("Daily Notes/not-a-date.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/not-a-date.md": { mood: 9 },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    // With a date range active, undated files are excluded
+    const datasets = await c.collectDatasets({
+      ...baseConfig,
+      folder: "Daily Notes",
+      properties: ["mood"],
+      range: { preset: "7d" },
+    });
+    expect(datasets[0].points).toHaveLength(0);
+  });
+
+  test("file with unparseable date is included when range is 'all'", async () => {
+    const file = makeFile("Daily Notes/not-a-date.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/not-a-date.md": { mood: 9 },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const datasets = await c.collectDatasets({
+      ...baseConfig,
+      folder: "Daily Notes",
+      properties: ["mood"],
+      range: { preset: "all" },
+    });
+    expect(datasets[0].points).toHaveLength(1);
+    expect(datasets[0].points[0].date).toBeNull();
+  });
+});
+
+// ============================================================
+// Date resolution: memoization (dateCache)
+// ============================================================
+
+describe("Date resolution: memoization", () => {
+  test("date result is consistent across two collectDatasets calls", async () => {
+    const file = makeFile("Daily Notes/2024-05-01.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-05-01.md": { mood: 7 },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const config = { ...baseConfig, folder: "Daily Notes", properties: ["mood"] };
+
+    const first = await c.collectDatasets(config);
+    const second = await c.collectDatasets(config);
+
+    // Both calls must resolve the same date
+    expect(first[0].points[0].date?.toISOString())
+      .toBe(second[0].points[0].date?.toISOString());
+  });
+
+  test("clearPropertyCache() with filePath evicts only that file's date cache entry", async () => {
+    const file1 = makeFile("Daily Notes/2024-01-10.md");
+    const file2 = makeFile("Daily Notes/2024-01-11.md");
+    const folder = makeFolder("Daily Notes", [file1, file2]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { mood: 7 },
+      "Daily Notes/2024-01-11.md": { mood: 8 },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const config = { ...baseConfig, folder: "Daily Notes", properties: ["mood"] };
+
+    // Warm the cache
+    await c.collectDatasets(config);
+
+    // Evict only file1
+    c.clearPropertyCache("Daily Notes/2024-01-10.md");
+
+    // Subsequent collection still works correctly
+    const datasets = await c.collectDatasets(config);
+    expect(datasets[0].points).toHaveLength(2);
+  });
+
+  test("clearPropertyCache() without argument clears all cached dates", async () => {
+    const file = makeFile("Daily Notes/2024-01-10.md");
+    const folder = makeFolder("Daily Notes", [file]);
+    const r = makeFolder("/", [folder]);
+    const fm: Record<string, Record<string, unknown>> = {
+      "Daily Notes/2024-01-10.md": { mood: 7 },
+    };
+    const a = makeApp(r, fm);
+    const c = new DataCollector(a, DEFAULT_SETTINGS);
+    const config = { ...baseConfig, folder: "Daily Notes", properties: ["mood"] };
+
+    // Warm the cache, then clear all
+    await c.collectDatasets(config);
+    c.clearPropertyCache();
+
+    // Should still resolve correctly after full clear
+    const datasets = await c.collectDatasets(config);
+    expect(datasets[0].points[0].date?.getFullYear()).toBe(2024);
   });
 });
