@@ -1,8 +1,9 @@
 import { ItemView, WorkspaceLeaf, debounce } from "obsidian";
-import { ChartConfig, Dataset, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, PluginSettings, RangePreset, stripWikiLinks } from "./types";
+import { ChartConfig, Dataset, CHART_COLORS_HEX, CSS, CSS_VARS, DISTRIBUTION_TYPES, PluginSettings, RangePreset, stripWikiLinks } from "./types";
 import { computeHeatmapDimensions, HEATMAP_WRAPPER_W } from "./HeatmapRenderer";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
+import { CODE_BLOCK_LANGUAGE } from "./CodeBlockProcessor";
 import {
   buildControls,
   populateFolderSelect,
@@ -12,7 +13,9 @@ import {
   ControlRefs,
 } from "./ChartViewControls";
 
-export const VIEW_TYPE_CHART = "chart-plugin-view";
+export const VIEW_TYPE_CHART = "property-charts-view";
+
+const DEFAULT_CHART_HEIGHT = "300px";
 
 export class ChartView extends ItemView {
   private config: ChartConfig;
@@ -64,7 +67,7 @@ export class ChartView extends ItemView {
 
     // Segment color section – populated dynamically when a distribution type is active.
     this.segmentColorSection = scrollArea.createDiv({ cls: CSS.section });
-    this.segmentColorSection.style.display = "none";
+    this.segmentColorSection.hide();
 
     // Button directly below settings, same horizontal inset as sections
     const actionsBar = root.createDiv({ cls: CSS.actions });
@@ -73,12 +76,13 @@ export class ChartView extends ItemView {
 
     // Year navigator for heatmap (hidden when type is not heatmap)
     this.yearNavContainer = root.createDiv({ cls: CSS.yearNav });
+    this.yearNavContainer.hide();
     const prevYearBtn = this.yearNavContainer.createEl("button", { text: "←", cls: CSS.toggleBtn });
-    prevYearBtn.setAttribute("aria-label", "Vorheriges Jahr");
-    const yearLabel = this.yearNavContainer.createEl("span");
+    prevYearBtn.setAttribute("aria-label", "Previous year");
+    const yearLabel = this.yearNavContainer.createSpan();
     yearLabel.setText(String(this.heatmapYear));
     const nextYearBtn = this.yearNavContainer.createEl("button", { text: "→", cls: CSS.toggleBtn });
-    nextYearBtn.setAttribute("aria-label", "Nächstes Jahr");
+    nextYearBtn.setAttribute("aria-label", "Next year");
     prevYearBtn.onclick = async () => {
       this.heatmapYear--;
       yearLabel.setText(String(this.heatmapYear));
@@ -92,14 +96,14 @@ export class ChartView extends ItemView {
 
     // Slot for empty-state guidance (no folder / no property selected)
     this.emptyStateEl = root.createDiv({ cls: CSS.noDataMsg });
-    this.emptyStateEl.style.display = "none";
+    this.emptyStateEl.hide();
 
     // Banner slot above the chart (shown when file limit is exceeded)
     this.bannerContainer = root.createDiv();
 
     // Chart below button with a fixed height
     this.chartContainer = root.createDiv({ cls: CSS.canvasContainer });
-    this.chartContainer.style.height = "300px";
+    this.chartContainer.setCssProps({ [CSS_VARS.containerHeight]: DEFAULT_CHART_HEIGHT });
 
     this.registerEvent(
       this.app.metadataCache.on("resolved", () => {
@@ -160,10 +164,10 @@ export class ChartView extends ItemView {
     this.heatmapYear = new Date().getFullYear();
     this.limitOverride = false;
     this.rebuildPropertySelects();
-    this.refresh();
+    void this.refresh();
   }
 
-  private copyCodeblock(btn: HTMLButtonElement): void {
+  private async copyCodeblock(btn: HTMLButtonElement): Promise<void> {
     const activeIndices = this.config.properties
       .map((p, i) => (p ? i : -1))
       .filter((i) => i >= 0);
@@ -201,7 +205,7 @@ export class ChartView extends ItemView {
       : "";
 
     const block = [
-      "```chart",
+      "```" + CODE_BLOCK_LANGUAGE,
       `type: ${this.config.type}`,
       `folder: ${yamlQuote(this.config.folder)}`,
       propYaml,
@@ -212,17 +216,18 @@ export class ChartView extends ItemView {
       "```",
     ].filter(Boolean).join("\n");
 
-    navigator.clipboard.writeText(block).then(() => {
+    try {
+      await navigator.clipboard.writeText(block);
       btn.setText("Copied!");
       btn.addClass("copied");
-      setTimeout(() => {
+      window.setTimeout(() => {
         btn.setText("Copy as codeblock");
         btn.removeClass("copied");
       }, 2000);
-    }).catch(() => {
+    } catch {
       btn.setText("Failed – check clipboard permissions");
-      setTimeout(() => btn.setText("Copy as codeblock"), 3000);
-    });
+      window.setTimeout(() => btn.setText("Copy as codeblock"), 3000);
+    }
   }
 
   async refresh(): Promise<void> {
@@ -239,34 +244,30 @@ export class ChartView extends ItemView {
       this.renderer?.destroy();
       this.renderer = null;
       this.chartContainer.empty();
-      this.chartContainer.style.display = "none";
+      this.chartContainer.hide();
       this.bannerContainer.empty();
       this.limitBanner = null;
       const emptyMsg = !this.config.folder
         ? "Select a folder to get started."
         : "Select a property to create a chart.";
       this.emptyStateEl.setText(emptyMsg);
-      this.emptyStateEl.style.display = "flex";
+      this.emptyStateEl.show();
       if (this.controlRefs?.dataHint) {
         this.controlRefs.dataHint.setText(emptyMsg);
-        this.controlRefs.dataHint.style.display = "";
+        this.controlRefs.dataHint.show();
       }
       return;
     }
 
-    if (this.controlRefs?.dataHint) {
-      this.controlRefs.dataHint.style.display = "none";
-    }
+    this.controlRefs?.dataHint?.hide();
 
-    this.emptyStateEl.style.display = "none";
-    this.chartContainer.style.display = "";
+    this.emptyStateEl.hide();
+    this.chartContainer.show();
 
-    if (isHeatmap) {
-      const { totalH } = computeHeatmapDimensions(HEATMAP_WRAPPER_W);
-      this.chartContainer.style.height = `${totalH}px`;
-    } else {
-      this.chartContainer.style.height = "300px";
-    }
+    const height = isHeatmap
+      ? `${computeHeatmapDimensions(HEATMAP_WRAPPER_W).totalH}px`
+      : DEFAULT_CHART_HEIGHT;
+    this.chartContainer.setCssProps({ [CSS_VARS.containerHeight]: height });
 
     this.chartContainer.addClass("is-loading");
     this.chartContainer.setAttribute("aria-busy", "true");
@@ -276,10 +277,10 @@ export class ChartView extends ItemView {
       this.syncControlState(datasets, configToRender, isHeatmap, isDistribution);
       await this.renderChartData(configToRender, datasets, isHeatmap);
     } catch (e) {
-      console.error("Chart Plugin: render error", e);
+      console.error("Property Charts: render error", e);
       this.chartContainer.empty();
       this.chartContainer.createEl("p", {
-        text: `Fehler beim Rendern des Charts: ${(e as Error).message}`,
+        text: `Failed to render chart: ${(e as Error).message}`,
         cls: CSS.error,
       });
     } finally {
@@ -289,9 +290,7 @@ export class ChartView extends ItemView {
   }
 
   private syncEarlyControlState(isHeatmap: boolean, hasActiveProperty: boolean): void {
-    if (this.yearNavContainer) {
-      this.yearNavContainer.style.display = isHeatmap ? "flex" : "none";
-    }
+    this.yearNavContainer?.toggle(isHeatmap);
     if (this.controlRefs) {
       const activeCount = this.config.properties.filter(Boolean).length;
       updateHeatmapButton(this.controlRefs, activeCount, this.config.type);
@@ -379,19 +378,19 @@ export class ChartView extends ItemView {
     }
 
     if (this.controlRefs?.rangeSection && !isHeatmap && !isDistribution) {
-      this.controlRefs.rangeSection.style.display = !allPropsAreText ? "" : "none";
+      this.controlRefs.rangeSection.toggle(!allPropsAreText);
     }
 
     if (this.controlRefs?.dataHint) {
       const hint = this.controlRefs.dataHint;
       if (isHeatmap && allPropsAreText) {
         hint.setText("Heatmap requires numeric or boolean values. Text values are not supported.");
-        hint.style.display = "";
+        hint.show();
       } else if (!isHeatmap && !isDistribution && allPropsAreText) {
         hint.setText("Text values detected — showing as frequency chart instead of time series.");
-        hint.style.display = "";
+        hint.show();
       } else {
-        hint.style.display = "none";
+        hint.hide();
       }
     }
   }
@@ -411,9 +410,8 @@ export class ChartView extends ItemView {
         text: `No data found. Check the time range and that your date format (${configToRender.dateFormat}) matches your filenames.`,
         cls: CSS.noDataMsg,
       });
-      // renderer bleibt als bereits-zerstörter Renderer stehen (canvas ist aus dem DOM
-      // entfernt). Der nächste refresh()-Aufruf räumt ihn korrekt auf, ohne dass die
-      // Guard-Bedingung (if (!this.renderer) return) greift.
+      // The renderer was already destroyed and reset to null above, so the next
+      // refresh() starts from a clean state.
       return;
     }
 
@@ -451,11 +449,11 @@ export class ChartView extends ItemView {
     section.empty();
 
     if (labels.length === 0) {
-      section.style.display = "none";
+      section.hide();
       return;
     }
 
-    section.style.display = "";
+    section.show();
     section.createDiv({ cls: CSS.sectionTitle, text: "Segment colors" });
 
     labels.forEach((label, i) => {
@@ -486,7 +484,7 @@ function renderLimitStatusChip(
 ): void {
   if (state === "truncated") {
     container.addClass("chart-plugin-limit-banner");
-    container.createEl("span", {
+    container.createSpan({
       text: `${limit.toLocaleString()} of ${totalCount.toLocaleString()} files loaded.`,
     });
     const btn = container.createEl("button");
@@ -494,7 +492,7 @@ function renderLimitStatusChip(
     btn.onclick = () => onToggle();
   } else {
     container.addClass("chart-plugin-limit-chip");
-    container.createEl("span", {
+    container.createSpan({
       text: `All ${totalCount.toLocaleString()} files loaded.`,
     });
     const btn = container.createEl("button");

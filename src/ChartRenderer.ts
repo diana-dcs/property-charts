@@ -1,9 +1,12 @@
 import { Chart, ChartConfiguration, ChartDataset, ChartType as ChartJsType, Plugin } from "chart.js/auto";
+import { moment } from "obsidian";
 
 import {
   ChartConfig,
   ChartType,
   CHART_COLORS_HEX,
+  CSS,
+  CSS_VARS,
   DISTRIBUTION_TYPES,
   Dataset,
   stripWikiLinks,
@@ -23,7 +26,7 @@ export class ChartRenderer {
 
   updateAriaLabel(config: ChartConfig): void {
     const props = config.properties.filter(Boolean).join(", ");
-    const label = `${config.type}-Chart: „${props || "—"}" in Ordner „${config.folder || "—"}"`;
+    const label = `${config.type} chart of "${props || "—"}" in folder "${config.folder || "—"}"`;
     this.canvas.setAttribute("role", "img");
     this.canvas.setAttribute("aria-label", label);
   }
@@ -54,29 +57,33 @@ export class ChartRenderer {
     // The constructor always creates this.canvas, which would fill the container via the
     // CSS rule "canvas { width:100%; height:100% }". Hide it so it doesn't obscure the
     // heatmap wrapper below.
-    this.canvas.style.display = "none";
+    this.canvas.hide();
 
     // Embed: fit to container width (no scroll). Sidebar: fixed width, scrolls horizontally.
     // Defer the width read to after layout so clientWidth is non-zero on first render.
     const availW = this.responsiveHeatmap
       ? await new Promise<number>((resolve) =>
-          requestAnimationFrame(() =>
+          window.requestAnimationFrame(() =>
             resolve(this.container.clientWidth || HEATMAP_WRAPPER_W)
           )
         )
       : HEATMAP_WRAPPER_W;
     const { wrapperH, totalH } = computeHeatmapDimensions(availW);
 
-    this.container.style.height = `${totalH}px`;
-    this.container.style.overflowX = "auto"; // safety valve for very narrow containers
-    this.container.style.padding = "0";
+    // The heatmap modifier class adds horizontal scrolling as a safety valve for very
+    // narrow containers and removes the padding.
+    this.container.addClass(CSS.heatmapContainer);
+    this.container.setCssProps({ [CSS_VARS.containerHeight]: `${totalH}px` });
 
-    const wrapper = this.container.createDiv({ cls: "chart-plugin-heatmap-wrapper" });
-    wrapper.style.cssText = `width:${availW}px;height:${totalH}px;flex-shrink:0;`;
+    const wrapper = this.container.createDiv({ cls: CSS.heatmapWrapper });
+    wrapper.setCssProps({
+      [CSS_VARS.heatmapWidth]: `${availW}px`,
+      [CSS_VARS.heatmapHeight]: `${totalH}px`,
+      [CSS_VARS.heatmapChartHeight]: `${wrapperH}px`,
+    });
     this.heatmapWrapper = wrapper;
 
-    const chartDiv = wrapper.createDiv();
-    chartDiv.style.cssText = `width:${availW}px;height:${wrapperH}px;position:relative;`;
+    const chartDiv = wrapper.createDiv({ cls: CSS.heatmapChart });
     const canvas = chartDiv.createEl("canvas");
 
     // Legend below the chart, still inside the wrapper so it scrolls together.
@@ -88,7 +95,7 @@ export class ChartRenderer {
     const points = dataset.points
       .filter((p) => p.date !== null)
       .map((p) => ({
-        date: window.moment(p.date!).format("YYYY-MM-DD"),
+        date: moment(p.date!).format("YYYY-MM-DD"),
         value: p.value as number | boolean | null,
       }));
     this.chart = renderHeatmap(canvas, points, color, year, config.range, isBool);
@@ -257,8 +264,7 @@ export class ChartRenderer {
       getComputedStyle(document.body).getPropertyValue("--text-muted").trim() ||
       "rgba(160,160,160,0.9)";
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const polarAreaScales: any = isPolarArea
+    const polarAreaScales: NonNullable<ChartConfiguration["options"]>["scales"] = isPolarArea
       ? {
           r: {
             grid: { color: "rgba(128,128,128,0.25)" },
@@ -294,8 +300,7 @@ export class ChartRenderer {
         },
         ...(polarAreaScales ? { scales: polarAreaScales } : {}),
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      plugins: instancePlugins as any,
+      plugins: instancePlugins,
     };
 
     this.chart = new Chart(this.canvas, cfg);
@@ -337,11 +342,7 @@ export class ChartRenderer {
       this.heatmapWrapper = null;
     }
     this.canvas.remove();
-    if (this.container.style) {
-      this.container.style.height = "";
-      this.container.style.overflowX = "";
-      this.container.style.overflowY = "";
-      this.container.style.padding = "";
-    }
+    this.container.removeClass(CSS.heatmapContainer);
+    this.container.setCssProps({ [CSS_VARS.containerHeight]: "" });
   }
 }

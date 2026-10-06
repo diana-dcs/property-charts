@@ -1,4 +1,4 @@
-import { App, TFile, TFolder } from "obsidian";
+import { App, TFile, TFolder, moment } from "obsidian";
 import {
   ChartConfig,
   DataPoint,
@@ -113,7 +113,7 @@ export class DataCollector {
 
       if (date) {
         // Dated file: apply the range filter.
-        const dateStr = window.moment(date).format("YYYY-MM-DD");
+        const dateStr = moment(date).format("YYYY-MM-DD");
         if (fromStr && dateStr < fromStr) continue;
         if (toStr && dateStr > toStr) continue;
       } else if (hasRangeFilter) {
@@ -188,11 +188,11 @@ export class DataCollector {
 
     // 1. Try frontmatter 'date' property
     if (cache?.frontmatter?.date) {
-      const parsed = window.moment(cache.frontmatter.date, dateFormat, true);
+      const parsed = moment(cache.frontmatter.date, dateFormat, true);
       if (parsed.isValid()) return parsed.toDate();
 
       // Try common formats as strict fallback (no lenient parse)
-      const fallback = window.moment(
+      const fallback = moment(
         cache.frontmatter.date,
         DataCollector.FALLBACK_DATE_FORMATS,
         true,
@@ -201,10 +201,10 @@ export class DataCollector {
     }
 
     // 2. Try filename with configured format, then common formats — always strict
-    const parsed = window.moment(file.basename, dateFormat, true);
+    const parsed = moment(file.basename, dateFormat, true);
     if (parsed.isValid()) return parsed.toDate();
 
-    const filenameFallback = window.moment(
+    const filenameFallback = moment(
       file.basename,
       DataCollector.FALLBACK_DATE_FORMATS,
       true,
@@ -217,22 +217,22 @@ export class DataCollector {
   private resolveRange(
     range: RangeConfig
   ): { from: string | null; to: string | null } {
-    const today = window.moment().format("YYYY-MM-DD");
+    const today = moment().format("YYYY-MM-DD");
 
     if (range.from && range.to) {
       return { from: range.from, to: range.to };
     }
 
     if (range.preset === "7d") {
-      return { from: window.moment().subtract(7, "days").format("YYYY-MM-DD"), to: today };
+      return { from: moment().subtract(7, "days").format("YYYY-MM-DD"), to: today };
     }
 
     if (range.preset === "30d") {
-      return { from: window.moment().subtract(30, "days").format("YYYY-MM-DD"), to: today };
+      return { from: moment().subtract(30, "days").format("YYYY-MM-DD"), to: today };
     }
 
     if (range.preset === "90d") {
-      return { from: window.moment().subtract(90, "days").format("YYYY-MM-DD"), to: today };
+      return { from: moment().subtract(90, "days").format("YYYY-MM-DD"), to: today };
     }
 
     // 'all' or undefined

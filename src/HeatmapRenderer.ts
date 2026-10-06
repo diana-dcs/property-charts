@@ -1,7 +1,8 @@
 import { Chart, ChartConfiguration, ScriptableContext } from "chart.js/auto";
 import { MatrixController, MatrixElement } from "chartjs-chart-matrix";
 import type { MatrixDataPoint } from "chartjs-chart-matrix";
-import { RangeConfig } from "./types";
+import { moment } from "obsidian";
+import { CSS, CSS_VARS, RangeConfig } from "./types";
 
 Chart.register(MatrixController, MatrixElement);
 
@@ -102,12 +103,12 @@ export function renderHeatmap(
 
   const { from: rangeFrom, to: rangeTo } = resolveRange(range);
 
-  const jan1 = window.moment(`${year}-01-01`);
+  const jan1 = moment(`${year}-01-01`);
   const startOfGrid = jan1.clone().startOf("isoWeek");
 
   const monthWeeks = new Map<number, string>();
   for (let m = 0; m < 12; m++) {
-    const firstOfMonth = window.moment(`${year}-${String(m+1).padStart(2,"0")}-01`);
+    const firstOfMonth = moment(`${year}-${String(m+1).padStart(2,"0")}-01`);
     const wIdx = Math.floor(firstOfMonth.diff(startOfGrid, "days") / 7);
     if (wIdx >= 0 && wIdx < NUM_WEEKS && !monthWeeks.has(wIdx)) {
       monthWeeks.set(wIdx, MONTH_LABELS[m]);
@@ -200,7 +201,7 @@ export function renderHeatmap(
             autoSkip: false,
             maxRotation: 0,
             font: { size: 11 },
-            callback(val: any) {
+            callback(val: string | number) {
               const w = Math.round(Number(val));
               return monthWeeks.get(w) ?? null;
             },
@@ -217,7 +218,7 @@ export function renderHeatmap(
             stepSize: 1,
             autoSkip: false,
             font: { size: 11 },
-            callback(val: any) {
+            callback(val: string | number) {
               const d = Math.round(Number(val));
               if (d === 0) return "Mon";
               if (d === 2) return "Wed";
@@ -244,30 +245,26 @@ export function renderHeatmapLegend(
   const emptyRgb = parseCssColor(emptyColorStr);
   const dataRgb = hexToRgb(colorHex) ?? [99, 132, 255];
 
-  const legend = container.createDiv();
-  // Direct style assignment required — Obsidian provides no API for dynamic computed layout values.
-  legend.style.cssText =
-    "display:flex;align-items:center;gap:3px;justify-content:flex-end;" +
-    `padding:4px ${Y_AXIS_W - 4}px 0 0;height:${LEGEND_H}px;box-sizing:border-box;`;
+  const legend = container.createDiv({ cls: CSS.heatmapLegend });
+  legend.setCssProps({
+    [CSS_VARS.legendHeight]: `${LEGEND_H}px`,
+    [CSS_VARS.legendPaddingRight]: `${Y_AXIS_W - 4}px`,
+    [CSS_VARS.legendCellSize]: `${CELL}px`,
+  });
 
   const label = (text: string) => {
-    const s = legend.createEl("span");
-    // Direct style assignment required — Obsidian provides no API for dynamic computed colors.
-    s.style.cssText = "font-size:11px;color:var(--text-muted);";
-    s.setText(text);
+    legend.createSpan({ cls: CSS.heatmapLegendLabel, text });
   };
 
   const steps = [0, 0.25, 0.5, 0.75, 1];
 
   label("Less");
   for (const t of steps) {
-    const sq = legend.createDiv();
-    // Direct style assignment required — Obsidian provides no API for dynamic computed colors.
-    sq.style.cssText = `width:${CELL}px;height:${CELL}px;border-radius:2px;flex-shrink:0;`;
+    const sq = legend.createDiv({ cls: CSS.heatmapLegendCell });
     const col = t === 0
       ? `rgba(${emptyRgb[0]},${emptyRgb[1]},${emptyRgb[2]},1)`
       : lerpRgba(emptyRgb[0], emptyRgb[1], emptyRgb[2], dataRgb[0], dataRgb[1], dataRgb[2], t, 1);
-    sq.style.backgroundColor = col;
+    sq.setCssProps({ [CSS_VARS.legendCellColor]: col });
   }
   label("More");
 }

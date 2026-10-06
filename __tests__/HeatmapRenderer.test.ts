@@ -21,7 +21,9 @@ function makeElement(tag = "div"): HTMLElement {
     children: [] as HTMLElement[],
     createEl: jest.fn((t: string) => makeElement(t)),
     createDiv: jest.fn(() => makeElement("div")),
+    createSpan: jest.fn(() => makeElement("span")),
     setText: jest.fn(),
+    setCssProps: jest.fn(),
     getPropertyValue: jest.fn(() => "#d0d0d0"),
   } as unknown as HTMLElement;
   return el;

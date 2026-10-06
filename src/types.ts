@@ -1,3 +1,5 @@
+import { normalizePath } from "obsidian";
+
 export type ChartType = "line" | "bar" | "heatmap" | "pie" | "doughnut" | "polarArea";
 
 export const DISTRIBUTION_TYPES: ChartType[] = ["pie", "doughnut", "polarArea"];
@@ -69,6 +71,13 @@ export function stripWikiLinks(s: string): string {
   return s.replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, (_, target, alias) => alias ?? target);
 }
 
+/** Normalizes a user-entered folder path while keeping "/" (vault root) and "" (unset) intact. */
+export function normalizeFolderPath(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed === "" || trimmed === "/") return trimmed;
+  return normalizePath(trimmed);
+}
+
 export const CSS = {
   view: "chart-plugin-view",
   controls: "chart-plugin-controls",
@@ -99,5 +108,25 @@ export const CSS = {
   hint: "chart-plugin-hint",
   noDataMsg: "chart-plugin-no-data-msg",
   btnSpacer: "chart-plugin-btn-spacer",
+  btnDisabled: "chart-plugin-btn-disabled",
+  embedNoData: "chart-plugin-embed-no-data",
+  heatmapContainer: "chart-plugin-canvas-container--heatmap",
+  heatmapWrapper: "chart-plugin-heatmap-wrapper",
+  heatmapChart: "chart-plugin-heatmap-chart",
+  heatmapLegend: "chart-plugin-heatmap-legend",
+  heatmapLegendLabel: "chart-plugin-heatmap-legend-label",
+  heatmapLegendCell: "chart-plugin-heatmap-legend-cell",
+} as const;
+
+/** CSS custom properties set from code for values computed at render time. */
+export const CSS_VARS = {
+  containerHeight: "--chart-plugin-height",
+  heatmapWidth: "--chart-plugin-heatmap-width",
+  heatmapHeight: "--chart-plugin-heatmap-height",
+  heatmapChartHeight: "--chart-plugin-heatmap-chart-height",
+  legendHeight: "--chart-plugin-legend-height",
+  legendPaddingRight: "--chart-plugin-legend-padding-right",
+  legendCellSize: "--chart-plugin-legend-cell-size",
+  legendCellColor: "--chart-plugin-legend-cell-color",
 } as const;
 

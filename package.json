@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-chart-plugin",
+  "name": "property-charts",
   "version": "1.0.0",
-  "description": "Visualize frontmatter data from your notes as interactive charts.",
+  "description": "Visualize frontmatter properties from your notes as interactive charts.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -10,7 +10,7 @@
     "test:watch": "jest --watch"
   },
   "keywords": [],
-  "author": "",
+  "author": "Diana",
   "license": "MIT",
   "devDependencies": {
     "@types/jest": "^29.5.0",

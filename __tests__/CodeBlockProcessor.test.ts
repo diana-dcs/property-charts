@@ -76,6 +76,16 @@ describe("US-06: buildConfig — YAML config parsing", () => {
     const config = processor.buildConfig({ property: "sleep" });
     expect(config.folder).toBe(DEFAULT_SETTINGS.defaultFolder);
   });
+
+  test("normalizes user-defined folder paths", () => {
+    const config = processor.buildConfig({ folder: "/Journal//Daily\\", property: "mood" });
+    expect(config.folder).toBe("Journal/Daily");
+  });
+
+  test("keeps / as the vault root folder", () => {
+    const config = processor.buildConfig({ folder: "/", property: "mood" });
+    expect(config.folder).toBe("/");
+  });
 });
 
 // ============================================================
@@ -102,7 +112,7 @@ describe("US-06: parseRange — range string parsing", () => {
   });
 
   test("unrecognized string throws an error", () => {
-    expect(() => processor.parseRange("invalid")).toThrow(/Ungültiger Bereich/);
+    expect(() => processor.parseRange("invalid")).toThrow(/Invalid range/);
   });
 
   test("custom range with same from and to date is valid", () => {
@@ -161,19 +171,19 @@ describe("Security: dateFormat sanitization", () => {
   test("format with regex metacharacters throws an error", () => {
     expect(() =>
       processor.buildConfig({ folder: "Notes", property: "x", dateFormat: "YYYY[.*+]{1,100}MM" })
-    ).toThrow(/Ungültiges dateFormat/);
+    ).toThrow(/Invalid dateFormat/);
   });
 
   test("format with backticks or quotes throws an error", () => {
     expect(() =>
       processor.buildConfig({ folder: "Notes", property: "x", dateFormat: "YYYY`MM`DD" })
-    ).toThrow(/Ungültiges dateFormat/);
+    ).toThrow(/Invalid dateFormat/);
   });
 });
 
 describe("Security: parseRange — malformed date strings", () => {
   test("non-date strings in custom range throw an error", () => {
-    expect(() => processor.parseRange("not-a-date:also-bad")).toThrow(/Ungültige Daten im Bereich/);
+    expect(() => processor.parseRange("not-a-date:also-bad")).toThrow(/Invalid dates in range/);
   });
 
   test("reversed range (from > to) is swapped automatically", () => {
@@ -182,7 +192,7 @@ describe("Security: parseRange — malformed date strings", () => {
   });
 
   test("partial date string throws an error", () => {
-    expect(() => processor.parseRange("2024-01:")).toThrow(/Ungültige Daten im Bereich/);
+    expect(() => processor.parseRange("2024-01:")).toThrow(/Invalid dates in range/);
   });
 });
 

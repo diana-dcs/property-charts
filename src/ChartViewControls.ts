@@ -7,7 +7,7 @@ const CHART_TYPE_LABELS: Record<ChartType, string> = {
   heatmap:   "Heatmap",
   pie:       "Pie",
   doughnut:  "Doughnut",
-  polarArea: "Polar Area",
+  polarArea: "Polar area",
 };
 
 const RANGE_LABELS: Record<string, string> = {
@@ -69,7 +69,7 @@ function buildDataSection(
   resetBtn.onclick = () => callbacks.onReset();
 
   refs.dataHint = section.createEl("p", { cls: CSS.dataHint });
-  refs.dataHint.style.cssText = "display:none; margin-bottom:6px;";
+  refs.dataHint.hide();
 
   const folderRow = section.createDiv({ cls: CSS.row });
   folderRow.createEl("label", { text: "Folder" });
@@ -88,13 +88,13 @@ function buildDataSection(
     await callbacks.onRefresh();
     if (hadProperties && refs.dataHint) {
       refs.dataHint.setText("Folder changed — please select a property.");
-      refs.dataHint.style.display = "";
+      refs.dataHint.show();
     }
   };
 
   refs.propSection = section.createDiv({ cls: CSS.propSection });
 
-  refs.addBtn = section.createEl("button", { text: "+ Dataset", cls: CSS.addBtn });
+  refs.addBtn = section.createEl("button", { text: "Add dataset", cls: CSS.addBtn });
   const addBtn = refs.addBtn;
   addBtn.onclick = () => {
     if (addBtn.getAttribute("aria-disabled") === "true") return;
@@ -117,12 +117,12 @@ function buildVisualizationSection(
   // Single hint for all chart types that only support one dataset
   const singleDatasetHint = section.createDiv({ cls: CSS.hint });
   singleDatasetHint.id = "chart-single-dataset-hint";
-  singleDatasetHint.setText("Heatmap, Pie, Doughnut and Polar Area can only display one dataset at a time.");
-  singleDatasetHint.style.marginBottom = "6px";
+  singleDatasetHint.setText("Heatmap, pie, doughnut and polar area charts can only display one dataset at a time.");
+  singleDatasetHint.hide();
   refs.singleDatasetHint = singleDatasetHint;
 
   const heatmapHint = section.createDiv({ cls: CSS.hint });
-  heatmapHint.style.cssText = "display:none; margin-bottom:6px;";
+  heatmapHint.hide();
   refs.heatmapHint = heatmapHint;
 
   // All type buttons share one "clear active" operation via this array.
@@ -192,8 +192,7 @@ function setButtonDisabled(btn: HTMLButtonElement, disabled: boolean, hintId?: s
     btn.removeAttribute("tabindex");
     if (hintId) btn.removeAttribute("aria-describedby");
   }
-  btn.style.opacity = disabled ? "0.45" : "";
-  btn.style.cursor = disabled ? "not-allowed" : "";
+  btn.toggleClass(CSS.btnDisabled, disabled);
 }
 
 export function updateHeatmapButton(
@@ -217,7 +216,7 @@ export function updateHeatmapButton(
 
   if (refs.heatmapHint) {
     const showHint = !disabledMulti && (textPropertySelected || !hasDates);
-    refs.heatmapHint.style.display = showHint ? "block" : "none";
+    refs.heatmapHint.toggle(showHint);
     if (showHint) refs.heatmapHint.setText(title);
   }
 
@@ -240,13 +239,13 @@ export function updateDistributionButtons(
   const isSingleDatasetType = isDistribution || activeType === "heatmap";
 
   if (refs.singleDatasetHint) {
-    refs.singleDatasetHint.style.display = multiDataset ? "block" : "none";
+    refs.singleDatasetHint.toggle(multiDataset);
   }
 
   if (refs.addBtn) {
     const disableAdd = isSingleDatasetType;
     const title = isSingleDatasetType
-      ? "Heatmap, Pie, Doughnut and Polar Area only support a single dataset"
+      ? "Heatmap, pie, doughnut and polar area charts only support a single dataset"
       : "";
     refs.addBtn.setAttribute("title", title);
     setButtonDisabled(refs.addBtn, disableAdd, "chart-single-dataset-hint");
@@ -257,7 +256,7 @@ export function updateDistributionButtons(
       !hasActiveProperty ||
       DISTRIBUTION_TYPES.includes(activeType) ||
       activeType === "heatmap";
-    refs.rangeSection.style.display = hideRange ? "none" : "";
+    refs.rangeSection.toggle(!hideRange);
   }
 }
 
@@ -268,8 +267,8 @@ function buildRangeSection(
 ): HTMLElement {
   const section = createSection(controls, "Time range");
 
-  const dateError = section.createEl("div", { cls: CSS.dateError });
-  dateError.style.cssText = "display:none; margin-bottom:6px;";
+  const dateError = section.createDiv({ cls: CSS.dateError });
+  dateError.hide();
 
   const presetRow = section.createDiv({ cls: CSS.row });
   presetRow.createEl("label", { text: "Preset" });
@@ -285,10 +284,8 @@ function buildRangeSection(
       btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
       btn.addClass("active");
       customBtn.removeClass("active");
-      fromRow.style.display = "none";
-      toRow.style.display = "none";
-      applyRow.style.display = "none";
-      dateError.style.display = "none";
+      setCustomRowsVisible(false);
+      dateError.hide();
       await callbacks.onRefresh();
     };
   });
@@ -298,9 +295,7 @@ function buildRangeSection(
   customBtn.onclick = () => {
     btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
     customBtn.addClass("active");
-    fromRow.style.display = "";
-    toRow.style.display = "";
-    applyRow.style.display = "";
+    setCustomRowsVisible(true);
   };
 
   const fromRow = section.createDiv({ cls: CSS.row });
@@ -316,10 +311,14 @@ function buildRangeSection(
   const applyRow = section.createDiv({ cls: `${CSS.row} ${CSS.rowEnd}` });
   const applyBtn = applyRow.createEl("button", { text: "Apply custom range", cls: CSS.toggleBtn });
 
+  const setCustomRowsVisible = (visible: boolean) => {
+    fromRow.toggle(visible);
+    toRow.toggle(visible);
+    applyRow.toggle(visible);
+  };
+
   // Show custom fields only when no preset is active (custom range is already set)
-  fromRow.style.display = isCustomActive ? "" : "none";
-  toRow.style.display = isCustomActive ? "" : "none";
-  applyRow.style.display = isCustomActive ? "" : "none";
+  setCustomRowsVisible(isCustomActive);
 
   applyBtn.onclick = async () => {
     fromInput.removeClass("is-invalid");
@@ -330,15 +329,15 @@ function buildRangeSection(
       if (missingFrom) fromInput.addClass("is-invalid");
       if (missingTo) toInput.addClass("is-invalid");
       dateError.setText("Please fill in both date fields.");
-      dateError.style.display = "block";
+      dateError.show();
       return;
     }
     if (fromInput.value > toInput.value) {
-      dateError.setText("'From' date must be before 'To' date.");
-      dateError.style.display = "block";
+      dateError.setText("The start date must be before the end date.");
+      dateError.show();
       return;
     }
-    dateError.style.display = "none";
+    dateError.hide();
     config.range = { from: fromInput.value, to: toInput.value };
     btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
     customBtn.addClass("active");
@@ -385,7 +384,7 @@ export function rebuildPropertySelects(
     const colorId = `chart-color-${i}`;
     const colorInput = row.createEl("input", { type: "color", cls: CSS.colorInput });
     colorInput.id = colorId;
-    colorInput.setAttribute("aria-label", `Farbe für Dataset ${i + 1}`);
+    colorInput.setAttribute("aria-label", `Color for dataset ${i + 1}`);
     colorInput.value = config.colors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length];
     const applyColor = async () => {
       config.colors[i] = colorInput.value;
@@ -407,7 +406,7 @@ export function rebuildPropertySelects(
 
     if (i > 0) {
       const removeBtn = row.createEl("button", { text: "×", cls: CSS.removeBtn });
-      removeBtn.setAttribute("aria-label", `Dataset ${i + 1} entfernen`);
+      removeBtn.setAttribute("aria-label", `Remove dataset ${i + 1}`);
       removeBtn.onclick = async () => {
         datasets.splice(i, 1);
         config.properties.splice(i, 1);
@@ -416,7 +415,7 @@ export function rebuildPropertySelects(
         await callbacks.onRefresh();
       };
     } else {
-      row.createEl("span", { cls: CSS.btnSpacer });
+      row.createSpan({ cls: CSS.btnSpacer });
     }
   });
 }

@@ -1,10 +1,11 @@
 {
-  "id": "obsidian-chart-plugin",
+  "id": "property-charts",
   "name": "Property Charts",
   "version": "1.0.0",
-  "minAppVersion": "1.4.0",
-  "description": "Visualize property data from your notes as interactive charts.",
+  "minAppVersion": "1.7.2",
+  "description": "Visualize properties from your notes as interactive line, bar, heatmap and pie charts.",
   "author": "Diana",
   "authorUrl": "https://github.com/diana-dcs",
-  "isDesktopOnly": false
+  "isDesktopOnly": false,
+  "fundingUrl": "https://buy.stripe.com/PLACEHOLDER"
 }

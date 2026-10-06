@@ -24,6 +24,9 @@ function makeContainer(): HTMLElement {
 
   return {
     createEl: jest.fn(() => canvas),
+    addClass: jest.fn(),
+    removeClass: jest.fn(),
+    setCssProps: jest.fn(),
   } as unknown as HTMLElement;
 }
 

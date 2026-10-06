@@ -2,7 +2,7 @@
 
 Visualize frontmatter properties from your notes as interactive charts — no coding required.
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 Pick a folder, pick a property, see your data. The interactive sidebar lets you explore and configure charts with dropdowns and buttons. When you're happy with the result, export it as a codeblock to embed it anywhere in your vault.
 
@@ -12,9 +12,9 @@ Pick a folder, pick a property, see your data. The interactive sidebar lets you 
 
 ### 1. Open the sidebar
 
-Click the bar chart icon in the ribbon, or run **Open Chart View** from the command palette.
+Click the bar chart icon in the ribbon, or run **Property Charts: Open chart view** from the command palette.
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 ### 2. Configure your chart
 
@@ -24,14 +24,14 @@ Click the bar chart icon in the ribbon, or run **Open Chart View** from the comm
 
 The chart updates live as you change settings.
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 ### 3. Embed in a note
 
 Click **Copy as codeblock** to copy the current chart configuration. Paste it into any note:
 
 ~~~markdown
-```chart
+```property-chart
 type: line
 folder: "Journal"
 property: "mood"
@@ -41,7 +41,7 @@ range: 30d
 ```
 ~~~
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 ---
 
@@ -58,7 +58,7 @@ range: 30d
 
 **Text values are handled automatically.** If a property contains text (e.g. tags, categories), the plugin switches to a frequency chart — no configuration needed.
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 ---
 
@@ -66,7 +66,7 @@ range: 30d
 
 Add multiple datasets to compare several properties side by side in one chart.
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 ---
 
@@ -74,13 +74,13 @@ Add multiple datasets to compare several properties side by side in one chart.
 
 Each dataset gets a color picker in the sidebar. For distribution charts (pie, doughnut, polar area), each segment has its own color. Colors are saved as hex values and included when you copy the configuration as a codeblock.
 
-[Screenshot]
+<!-- TODO: add screenshot -->
 
 ---
 
 ## Codeblock reference
 
-All options for the `chart` codeblock:
+All options for the `property-chart` codeblock:
 
 ```yaml
 type: line          # line | bar | heatmap | pie | doughnut | polarArea
@@ -117,17 +117,21 @@ All data stays in your vault. The plugin reads frontmatter from your local files
 
 ---
 
-## Support
-
-If you find Property Charts useful, you can [buy me a coffee](). Any support is greatly appreciated and helps keep the plugin maintained.
-
----
-
 ## Third-party libraries
 
 - [Chart.js](https://www.chartjs.org/) (MIT) — chart rendering
 - [chartjs-chart-matrix](https://github.com/kurkle/chartjs-chart-matrix) (MIT) — heatmap chart type
 - [js-yaml](https://github.com/nodeca/js-yaml) (MIT) — codeblock YAML parsing
+
+---
+
+## Support
+
+If Property Charts is useful to you, feedback is very welcome — bug reports, feature ideas, or just a note that it's working well for you.
+
+**Found a bug or have a suggestion?** [Open an issue on GitHub](https://github.com/diana-dcs/property-charts/issues)
+
+**Want to support development?** [Buy me a coffee ☕](https://buy.stripe.com/PLACEHOLDER)
 
 ---
 

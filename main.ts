@@ -1,7 +1,7 @@
-import { AbstractInputSuggest, Plugin, PluginSettingTab, App, Setting, TFile, TFolder, WorkspaceLeaf, debounce } from "obsidian";
+import { AbstractInputSuggest, Plugin, PluginSettingTab, App, Setting, TFile, debounce } from "obsidian";
 import { VIEW_TYPE_CHART, ChartView } from "./src/ChartView";
-import { CodeBlockProcessor } from "./src/CodeBlockProcessor";
-import { ChartType, DEFAULT_SETTINGS, PluginSettings, RangePreset } from "./src/types";
+import { CodeBlockProcessor, CODE_BLOCK_LANGUAGE } from "./src/CodeBlockProcessor";
+import { ChartType, DEFAULT_SETTINGS, PluginSettings, RangePreset, normalizeFolderPath } from "./src/types";
 
 export default class ChartPlugin extends Plugin {
   settings: PluginSettings;
@@ -18,15 +18,15 @@ export default class ChartPlugin extends Plugin {
       (leaf) => new ChartView(leaf, this.settings)
     );
 
-    // Register ```chart code block processor
+    // Register ```property-chart code block processor
     this.registerMarkdownCodeBlockProcessor(
-      "chart",
+      CODE_BLOCK_LANGUAGE,
       this.codeBlockProcessor.process.bind(this.codeBlockProcessor)
     );
 
     // Ribbon icon
-    this.addRibbonIcon("bar-chart-2", "Open Chart View", () => {
-      this.activateView();
+    this.addRibbonIcon("bar-chart-2", "Open chart view", () => {
+      void this.activateView();
     });
 
     // Settings tab
@@ -35,8 +35,8 @@ export default class ChartPlugin extends Plugin {
     // Command palette
     this.addCommand({
       id: "open-chart-view",
-      name: "Open Chart View",
-      callback: () => this.activateView(),
+      name: "Open chart view",
+      callback: () => void this.activateView(),
     });
 
     // Defer event listeners until after Obsidian finishes loading the workspace.
@@ -56,21 +56,30 @@ export default class ChartPlugin extends Plugin {
       );
       this.registerEvent(
         this.app.vault.on("delete", (file) => {
-          this.codeBlockProcessor.pruneStaleEntries();
           if (file instanceof TFile) this.refreshViews(file);
+        })
+      );
+      // Chart colours are read from theme CSS variables at render time, so a
+      // theme / dark-light switch needs a re-render. One frame of delay lets
+      // Obsidian apply the new stylesheet before getComputedStyle() runs.
+      this.registerEvent(
+        this.app.workspace.on("css-change", () => {
+          window.requestAnimationFrame(() => this.refreshViews());
         })
       );
     });
   }
 
-  onunload(): void {}
+  onunload(): void {
+    this.codeBlockProcessor.scheduleRefreshAll.cancel();
+  }
 
   private async activateView(): Promise<void> {
     const { workspace } = this.app;
 
     const existing = workspace.getLeavesOfType(VIEW_TYPE_CHART);
     if (existing.length > 0) {
-      workspace.revealLeaf(existing[0]);
+      await workspace.revealLeaf(existing[0]);
       return;
     }
 
@@ -78,7 +87,7 @@ export default class ChartPlugin extends Plugin {
     if (!leaf) return;
 
     await leaf.setViewState({ type: VIEW_TYPE_CHART, active: true });
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
 
   applySettingsToViews(): void {
@@ -133,15 +142,15 @@ class ChartPluginSettingTab extends PluginSettingTab {
         .setPlaceholder("Search folders…")
         .setValue(this.plugin.settings.defaultFolder);
 
-      new FolderSuggest(this.app, text.inputEl, (folder) => {
+      new FolderSuggest(this.app, text.inputEl, async (folder) => {
         this.plugin.settings.defaultFolder = folder;
-        this.plugin.saveSettings();
-        this.plugin.applySettingsToViews();
         text.setValue(folder);
+        await this.plugin.saveSettings();
+        this.plugin.applySettingsToViews();
       });
 
       text.onChange(async (value) => {
-        this.plugin.settings.defaultFolder = value;
+        this.plugin.settings.defaultFolder = normalizeFolderPath(value);
         await this.plugin.saveSettings();
         this.plugin.applySettingsToViews();
       });
@@ -170,7 +179,7 @@ class ChartPluginSettingTab extends PluginSettingTab {
             heatmap: "Heatmap",
             pie: "Pie",
             doughnut: "Doughnut",
-            polarArea: "Polar Area",
+            polarArea: "Polar area",
           })
           .setValue(this.plugin.settings.defaultChartType)
           .onChange(async (value) => {
@@ -209,23 +218,15 @@ class ChartPluginSettingTab extends PluginSettingTab {
 }
 
 class FolderSuggest extends AbstractInputSuggest<string> {
-  private cb: (folder: string) => void;
+  private cb: (folder: string) => Promise<void>;
 
-  constructor(app: App, inputEl: HTMLInputElement, cb: (folder: string) => void) {
+  constructor(app: App, inputEl: HTMLInputElement, cb: (folder: string) => Promise<void>) {
     super(app, inputEl);
     this.cb = cb;
   }
 
   getSuggestions(query: string): string[] {
-    const folders: string[] = [];
-    const recurse = (folder: TFolder) => {
-      folders.push(folder.path === "/" ? "/" : folder.path);
-      for (const child of folder.children) {
-        if (child instanceof TFolder) recurse(child);
-      }
-    };
-    recurse(this.app.vault.getRoot());
-
+    const folders = this.app.vault.getAllFolders(true).map((folder) => folder.path);
     const lower = query.toLowerCase();
     return folders.filter((f) => f.toLowerCase().includes(lower)).slice(0, 50);
   }
@@ -235,7 +236,7 @@ class FolderSuggest extends AbstractInputSuggest<string> {
   }
 
   selectSuggestion(folder: string): void {
-    this.cb(folder);
+    void this.cb(folder);
     this.close();
   }
 }

@@ -1,5 +1,5 @@
 /* ============================================================
-   Chart Plugin — Styles
+   Property Charts — Styles
    ============================================================ */
 
 /*
@@ -7,7 +7,7 @@
   leaf layout). We only need to: stop it from scrolling, reset its padding,
   and let our inner flex column take over.
 */
-.workspace-leaf-content[data-type="chart-plugin-view"] .view-content {
+.workspace-leaf-content[data-type="property-charts-view"] .view-content {
   overflow: hidden;
   padding: 0;
 }
@@ -153,6 +153,13 @@
   font-style: normal;
 }
 
+/* Hints shown above controls inside a section */
+.chart-plugin-data-hint,
+.chart-plugin-hint,
+.chart-plugin-date-error {
+  margin-bottom: 6px;
+}
+
 /* Add dataset button */
 .chart-plugin-add-btn {
   width: 100%;
@@ -246,16 +253,25 @@
 
 /* ── Date input validation ───────────────────────────────── */
 
-input[type="date"].is-invalid {
-  border-color: var(--color-red, #e05252) !important;
-  outline: 1px solid var(--color-red, #e05252);
+.chart-plugin-date-input.is-invalid {
+  border-color: var(--color-red);
+  outline: 1px solid var(--color-red);
+}
+
+/* ── Disabled buttons (kept focusable, see setButtonDisabled) ── */
+
+.chart-plugin-view button.chart-plugin-btn-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ── Canvas area ─────────────────────────────────────────── */
 
+/* --chart-plugin-height is set from code (default chart height or computed heatmap height) */
 .chart-plugin-canvas-container {
   flex: 1;
   min-height: 0;   /* required for flex children to shrink below content height */
+  height: var(--chart-plugin-height, auto);
   padding: 12px;
   position: relative;
 }
@@ -280,8 +296,15 @@ input[type="date"].is-invalid {
 }
 
 .chart-plugin-embed .chart-plugin-canvas-container {
-  height: 300px;
+  height: var(--chart-plugin-height, 300px);
   padding: 0;
+}
+
+.chart-plugin-embed-no-data {
+  color: var(--text-muted);
+  padding: 1em;
+  font-size: 0.9em;
+  margin: 0;
 }
 
 /* ── Heatmap ─────────────────────────────────────────────── */
@@ -292,9 +315,46 @@ input[type="date"].is-invalid {
   exactly the wrapper dimensions, not the outer container — this keeps
   cells square at the GitHub-standard 11×11 px regardless of sidebar width.
 */
+.chart-plugin-canvas-container.chart-plugin-canvas-container--heatmap {
+  overflow-x: auto; /* safety valve for very narrow containers */
+  padding: 0;
+}
+
+/* Dimensions are computed at render time and passed in as custom properties */
 .chart-plugin-heatmap-wrapper {
   display: block;
   flex-shrink: 0;
+  width: var(--chart-plugin-heatmap-width);
+  height: var(--chart-plugin-heatmap-height);
+}
+
+.chart-plugin-heatmap-chart {
+  position: relative;
+  width: var(--chart-plugin-heatmap-width);
+  height: var(--chart-plugin-heatmap-chart-height);
+}
+
+.chart-plugin-heatmap-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  box-sizing: border-box;
+  height: var(--chart-plugin-legend-height);
+  padding: 4px var(--chart-plugin-legend-padding-right) 0 0;
+}
+
+.chart-plugin-heatmap-legend-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chart-plugin-heatmap-legend-cell {
+  flex-shrink: 0;
+  width: var(--chart-plugin-legend-cell-size);
+  height: var(--chart-plugin-legend-cell-size);
+  border-radius: 2px;
+  background-color: var(--chart-plugin-legend-cell-color);
 }
 
 /* ── File limit banner ───────────────────────────────────── */
@@ -387,7 +447,7 @@ input[type="date"].is-invalid {
 /* ── Year navigator (heatmap) ────────────────────────────── */
 
 .chart-plugin-year-nav {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5em;
@@ -398,12 +458,6 @@ input[type="date"].is-invalid {
   min-width: 4ch;
   text-align: center;
   font-weight: 500;
-}
-
-/* ── Inline hints (heatmap / distribution disabled notices) ─ */
-
-.chart-plugin-hint {
-  display: none;
 }
 
 /* ── Invisible spacer replacing the remove button ───────── */
