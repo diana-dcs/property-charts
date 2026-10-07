@@ -263,38 +263,12 @@ export class DataCollector {
       return raw.length > 0 ? this.inferValueType(raw[0]) : "number";
     }
     if (typeof raw === "boolean") return "boolean";
-    if (typeof raw === "number") {
-      if (Number.isInteger(raw) && raw >= 1 && raw <= 10) return "rating";
-      return "number";
-    }
+    if (typeof raw === "number") return "number";
     if (typeof raw === "string") {
       const num = parseFloat(raw);
       if (!isNaN(num)) return "number";
       return "text";
     }
     return "number";
-  }
-
-  /** Samples the first available value of a property to infer its type without a full collection. */
-  getPropertyType(folderPath: string, property: string): PropertyValueType {
-    for (const file of this.getFilesInFolder(folderPath)) {
-      const cache = this.app.metadataCache.getFileCache(file);
-      if (!cache?.frontmatter) continue;
-      if (!Object.prototype.hasOwnProperty.call(cache.frontmatter, property)) continue;
-      const raw = cache.frontmatter[property];
-      if (raw !== undefined && raw !== null) return this.inferValueType(raw);
-    }
-    return "number";
-  }
-
-  /** For text-type properties: returns frequency map */
-  getTextFrequencies(dataset: Dataset): Record<string, number> {
-    const freq: Record<string, number> = {};
-    for (const point of dataset.points) {
-      if (typeof point.rawValue === "string") {
-        freq[point.rawValue] = (freq[point.rawValue] ?? 0) + 1;
-      }
-    }
-    return freq;
   }
 }

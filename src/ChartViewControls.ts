@@ -198,7 +198,6 @@ function setButtonDisabled(btn: HTMLButtonElement, disabled: boolean, hintId?: s
 export function updateHeatmapButton(
   refs: ControlRefs,
   activeDatasetCount: number,
-  activeType: ChartType,
   textPropertySelected = false,
   hasDates = true
 ): void {

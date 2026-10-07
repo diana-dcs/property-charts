@@ -149,7 +149,7 @@ export class ChartView extends ItemView {
       }
     );
     const activeCount = this.config.properties.filter(Boolean).length;
-    updateHeatmapButton(this.controlRefs, activeCount, this.config.type);
+    updateHeatmapButton(this.controlRefs, activeCount);
     updateDistributionButtons(this.controlRefs, activeCount, this.config.type, activeCount > 0);
   }
 
@@ -293,7 +293,7 @@ export class ChartView extends ItemView {
     this.yearNavContainer?.toggle(isHeatmap);
     if (this.controlRefs) {
       const activeCount = this.config.properties.filter(Boolean).length;
-      updateHeatmapButton(this.controlRefs, activeCount, this.config.type);
+      updateHeatmapButton(this.controlRefs, activeCount);
       updateDistributionButtons(this.controlRefs, activeCount, this.config.type, hasActiveProperty);
     }
   }
@@ -374,7 +374,7 @@ export class ChartView extends ItemView {
 
     if (this.controlRefs) {
       const activeCount = this.config.properties.filter(Boolean).length;
-      updateHeatmapButton(this.controlRefs, activeCount, this.config.type, isTextProperty, hasDates);
+      updateHeatmapButton(this.controlRefs, activeCount, isTextProperty, hasDates);
     }
 
     if (this.controlRefs?.rangeSection && !isHeatmap && !isDistribution) {

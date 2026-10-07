@@ -6,7 +6,7 @@ export const DISTRIBUTION_TYPES: ChartType[] = ["pie", "doughnut", "polarArea"];
 
 export const ALL_CHART_TYPES: ChartType[] = ["line", "bar", "heatmap", "pie", "doughnut", "polarArea"];
 
-export type PropertyValueType = "number" | "boolean" | "rating" | "text";
+export type PropertyValueType = "number" | "boolean" | "text";
 
 export interface DataPoint {
   date: Date | null;

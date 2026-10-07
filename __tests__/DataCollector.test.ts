@@ -316,22 +316,6 @@ describe("Data type normalization", () => {
     expect(datasets[0].valueType).toBe("text");
   });
 
-  test("getTextFrequencies counts occurrences correctly", async () => {
-    const fm: Record<string, Record<string, unknown>> = {
-      "Daily Notes/2024-01-10.md": { mood: "happy" },
-      "Daily Notes/2024-01-11.md": { mood: "tired" },
-      "Daily Notes/2024-01-12.md": { mood: "happy" },
-      "Daily Notes/2024-01-13.md": { mood: "focused" },
-    };
-    const a = makeApp(root, fm);
-    const c = new DataCollector(a, DEFAULT_SETTINGS);
-    const datasets = await c.collectDatasets({ ...baseConfig, properties: ["mood"] });
-    const freq = c.getTextFrequencies(datasets[0]);
-    expect(freq["happy"]).toBe(2);
-    expect(freq["tired"]).toBe(1);
-    expect(freq["focused"]).toBe(1);
-  });
-
   test("files with no matching frontmatter are excluded gracefully", async () => {
     const fm: Record<string, Record<string, unknown>> = {
       "Daily Notes/2024-01-10.md": { sleep: 7 },
