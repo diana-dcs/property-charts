@@ -2,7 +2,7 @@
 
 Visualize properties from your notes as interactive charts — no coding required.
 
-![Property Charts Header](property-charts-header.png)
+![Property Charts Header](docs/images/property-charts-header.png)
 
 Pick a folder, pick a property, see your data. The interactive sidebar lets you explore and configure charts with dropdowns and buttons. When you're happy with the result, export it as a codeblock to embed it anywhere in your vault.
   
@@ -21,7 +21,7 @@ Click the bar chart icon in the ribbon, or run **Property Charts: Open chart vie
 
 The chart updates live as you change settings.
 
-![Property Charts Folders](property-charts-folder.png)
+![Property Charts Folders](docs/images/property-charts-folder.png)
 ### 3. Embed in a note
 
 Click **Copy as codeblock** to copy the current chart configuration. Paste it into any note:
@@ -37,7 +37,7 @@ range: all
 ```  
 ~~~  
 
-![Property Charts Copy as Codeblock](property-charts-codeblock.png)
+![Property Charts Copy as Codeblock](docs/images/property-charts-codeblock.png)
   
 ---  
 
@@ -60,7 +60,7 @@ range: all
 
 Add multiple datasets to compare several properties side by side in one chart.
 
-![Property Charts Multiple Properties](property-charts-multiple.png)
+![Property Charts Multiple Properties](docs/images/property-charts-multiple.png)
   
 ---  
 
@@ -68,7 +68,7 @@ Add multiple datasets to compare several properties side by side in one chart.
 
 Each dataset gets a color picker in the sidebar. For distribution charts (pie, doughnut, polar area), each segment has its own color. Colors are saved as hex values and included when you copy the configuration as a codeblock.
 
-![Property Charts Colors](property-charts-color.png)
+![Property Charts Colors](docs/images/property-charts-color.png)
   
 ---  
 
