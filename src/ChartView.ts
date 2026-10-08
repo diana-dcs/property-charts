@@ -101,7 +101,9 @@ export class ChartView extends ItemView {
     // Settings area: scrolls internally when many datasets are added
     const scrollArea = root.createDiv({ cls: CSS.scrollArea });
 
-    this.controlRefs = buildControls(scrollArea, this.config, this.collector, {
+    this.controlRefs = buildControls(scrollArea, this.collector, {
+      getConfig: () => this.config,
+      onConfigChange: (patch) => this.updateConfig(patch),
       onRefresh: () => this.refresh(),
       onRebuildPropertySelects: () => this.rebuildPropertySelects(),
       onReset: () => this.resetConfig(),
@@ -170,7 +172,7 @@ export class ChartView extends ItemView {
     this.settings = settings;
     this.collector.updateSettings(settings);
     if (!this.config.folder && settings.defaultFolder) {
-      this.config.folder = settings.defaultFolder;
+      this.updateConfig({ folder: settings.defaultFolder });
       if (this.controlRefs) {
         populateFolderSelect(this.controlRefs.folderSelect, this.config, this.collector);
         this.rebuildPropertySelects();
@@ -186,6 +188,8 @@ export class ChartView extends ItemView {
       this.config,
       this.collector,
       {
+        getConfig: () => this.config,
+        onConfigChange: (patch) => this.updateConfig(patch),
         onRefresh: () => this.refresh(),
         onRebuildPropertySelects: () => this.rebuildPropertySelects(),
         onReset: () => this.resetConfig(),
@@ -202,12 +206,19 @@ export class ChartView extends ItemView {
     );
   }
 
+  /** Replaces the owned config with an updated copy. The only writer. */
+  private updateConfig(patch: Partial<ChartConfig>): void {
+    this.config = { ...this.config, ...patch };
+  }
+
   private resetConfig(): void {
-    this.config.type = this.settings.defaultChartType;
-    this.config.properties = [""];
-    this.config.colors = [CHART_COLORS_HEX[0]];
-    this.config.dateFormat = this.settings.defaultDateFormat;
-    this.config.range = { preset: this.settings.defaultRange };
+    this.updateConfig({
+      type: this.settings.defaultChartType,
+      properties: [""],
+      colors: [CHART_COLORS_HEX[0]],
+      dateFormat: this.settings.defaultDateFormat,
+      range: { preset: this.settings.defaultRange },
+    });
     this.heatmapYear = new Date().getFullYear();
     this.limitOverride = false;
     this.shape = PERMISSIVE_SHAPE;
@@ -504,7 +515,9 @@ colorAt(this.config.colors, i);
       // Use onchange only so the chart re-renders after the picker is closed,
       // preventing the picker from closing mid-selection.
       colorInput.onchange = handle(async () => {
-        this.config.colors[i] = colorInput.value;
+        this.updateConfig({
+          colors: this.config.colors.map((c, k) => (k === i ? colorInput.value : c)),
+        });
         await this.refresh();
       });
     });

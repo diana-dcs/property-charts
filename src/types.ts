@@ -57,14 +57,19 @@ export interface Dataset {
   totalCount?: number;
 }
 
+/**
+ * A chart's full description. Readonly throughout: the sidebar owns one of these and
+ * replaces it with an updated copy on every change, so the controls can read it but
+ * cannot quietly reshape the view's state from under it.
+ */
 export interface ChartConfig {
-  type: ChartType;
-  folder: string;
-  properties: string[];
-  colors: string[];
-  dateFormat: string;
-  range: RangeConfig;
-  heatmapYear?: number;
+  readonly type: ChartType;
+  readonly folder: string;
+  readonly properties: readonly string[];
+  readonly colors: readonly string[];
+  readonly dateFormat: string;
+  readonly range: RangeConfig;
+  readonly heatmapYear?: number;
 }
 
 export type RangePreset = "7d" | "30d" | "90d" | "all";

@@ -35,6 +35,14 @@ export interface ControlRefs {
 }
 
 export interface ControlCallbacks {
+  /**
+   * The view's current config. A getter rather than a captured object: the view
+   * replaces its config on every change, so a reference taken at build time would go
+   * stale inside these long-lived event handlers.
+   */
+  getConfig: () => ChartConfig;
+  /** Reports a change for the view to apply. The controls never write the config. */
+  onConfigChange: (patch: Partial<ChartConfig>) => void;
   onRefresh: () => Promise<void>;
   onRebuildPropertySelects: () => void;
   onReset: () => void;
@@ -42,11 +50,11 @@ export interface ControlCallbacks {
 
 export function buildControls(
   root: HTMLElement,
-  config: ChartConfig,
   collector: DataCollector,
   callbacks: ControlCallbacks
 ): ControlRefs {
   const controls = root.createDiv({ cls: CSS.controls });
+  const config = callbacks.getConfig();
 
   return {
     ...buildDataSection(controls, config, collector, callbacks),
@@ -80,12 +88,13 @@ function buildDataSection(
   const folderSelect = folderRow.createEl("select", { cls: "dropdown" });
   populateFolderSelect(folderSelect, config, collector);
   folderSelect.onchange = handle(async () => {
-    const hadProperties = config.properties.some(Boolean);
-    config.folder = folderSelect.value;
-    config.properties.length = 0;
-    config.properties.push("");
-    config.colors.length = 0;
-    config.colors.push(CHART_COLORS_HEX[0]);
+    const hadProperties = callbacks.getConfig().properties.some(Boolean);
+    // A new folder has its own property names, so the old selection cannot carry over.
+    callbacks.onConfigChange({
+      folder: folderSelect.value,
+      properties: [""],
+      colors: [CHART_COLORS_HEX[0]],
+    });
     callbacks.onRebuildPropertySelects();
     await callbacks.onRefresh();
     if (hadProperties) {
@@ -99,8 +108,11 @@ function buildDataSection(
   const addBtn = section.createEl("button", { text: "Add dataset", cls: CSS.addBtn });
   addBtn.onclick = () => {
     if (addBtn.getAttribute("aria-disabled") === "true") return;
-    config.properties.push("");
-    config.colors.push(colorAt(config.colors, config.colors.length));
+    const { properties, colors } = callbacks.getConfig();
+    callbacks.onConfigChange({
+      properties: [...properties, ""],
+      colors: [...colors, colorAt(colors, colors.length)],
+    });
     callbacks.onRebuildPropertySelects();
   };
 
@@ -141,7 +153,7 @@ function buildVisualizationSection(
     const btn = trendGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
     if (t === config.type) btn.addClass("active");
     btn.onclick = handle(async () => {
-      config.type = t;
+      callbacks.onConfigChange({ type: t });
       clearActive();
       btn.addClass("active");
       await callbacks.onRefresh();
@@ -153,7 +165,7 @@ function buildVisualizationSection(
   if (config.type === "heatmap") heatmapBtn.addClass("active");
   heatmapBtn.onclick = handle(async () => {
     if (heatmapBtn.getAttribute("aria-disabled") === "true") return;
-    config.type = "heatmap";
+    callbacks.onConfigChange({ type: "heatmap" });
     clearActive();
     heatmapBtn.addClass("active");
     await callbacks.onRefresh();
@@ -171,7 +183,7 @@ function buildVisualizationSection(
     if (t === config.type) btn.addClass("active");
     btn.onclick = handle(async () => {
       if (btn.getAttribute("aria-disabled") === "true") return;
-      config.type = t;
+      callbacks.onConfigChange({ type: t });
       clearActive();
       btn.addClass("active");
       await callbacks.onRefresh();
@@ -272,7 +284,7 @@ function buildRangeSection(
     const btn = btnGroup.createEl("button", { text: RANGE_PRESET_LABELS[r], cls: CSS.toggleBtn });
     if (config.range.preset === r) btn.addClass("active");
     btn.onclick = handle(async () => {
-      config.range = { preset: r };
+      callbacks.onConfigChange({ range: { preset: r } });
       btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
       btn.addClass("active");
       customBtn.removeClass("active");
@@ -330,13 +342,18 @@ function buildRangeSection(
       return;
     }
     dateError.hide();
-    config.range = { from: fromInput.value, to: toInput.value };
+    callbacks.onConfigChange({ range: { from: fromInput.value, to: toInput.value } });
     btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
     customBtn.addClass("active");
     await callbacks.onRefresh();
   });
 
   return section;
+}
+
+/** A copy of `values` with the entry at `index` replaced. */
+function replaceAt(values: readonly string[], index: number, value: string): string[] {
+  return values.map((existing, i) => (i === index ? value : existing));
 }
 
 function createSection(parent: HTMLElement, title: string): HTMLElement {
@@ -380,7 +397,7 @@ export function rebuildPropertySelects(
     // Both events: oninput gives live feedback while dragging, onchange catches the
     // keyboard and paste paths that never fire oninput.
     const applyColor = handle(async () => {
-      config.colors[i] = colorInput.value;
+      callbacks.onConfigChange({ colors: replaceAt(callbacks.getConfig().colors, i, colorInput.value) });
       await callbacks.onRefresh();
     });
     colorInput.oninput = applyColor;
@@ -393,7 +410,9 @@ export function rebuildPropertySelects(
       if (prop === config.properties[i]) opt.selected = true;
     }
     propSelect.onchange = handle(async () => {
-      config.properties[i] = propSelect.value;
+      callbacks.onConfigChange({
+        properties: replaceAt(callbacks.getConfig().properties, i, propSelect.value),
+      });
       await callbacks.onRefresh();
     });
 
@@ -401,8 +420,11 @@ export function rebuildPropertySelects(
       const removeBtn = row.createEl("button", { text: "×", cls: CSS.removeBtn });
       removeBtn.setAttribute("aria-label", `Remove dataset ${i + 1}`);
       removeBtn.onclick = handle(async () => {
-        config.properties.splice(i, 1);
-        config.colors.splice(i, 1);
+        const { properties, colors } = callbacks.getConfig();
+        callbacks.onConfigChange({
+          properties: properties.filter((_, k) => k !== i),
+          colors: colors.filter((_, k) => k !== i),
+        });
         callbacks.onRebuildPropertySelects();
         await callbacks.onRefresh();
       });
