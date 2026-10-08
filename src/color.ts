@@ -94,6 +94,23 @@ export function themeColorString(cssVar: string, fallback: string): string {
   return getComputedStyle(document.body).getPropertyValue(cssVar).trim() || fallback;
 }
 
+/** The theme variables the charts paint with, and so have to re-read on a theme change. */
+const THEME_VARS = [
+  "--background-modifier-border",
+  "--text-normal",
+  "--text-muted",
+] as const;
+
+/**
+ * A snapshot of the theme colors the charts depend on, for detecting when a theme change
+ * has actually taken effect. Canvas pixels cannot be restyled after the fact, so the
+ * charts must not be drawn until the new values are readable.
+ */
+export function themeSignature(): string {
+  if (typeof document === "undefined") return "";
+  return THEME_VARS.map((cssVar) => themeColorString(cssVar, "")).join("|");
+}
+
 export function lerpRgba(from: Rgb, to: Rgb, t: number, alpha: number): string {
   return rgba(
     [

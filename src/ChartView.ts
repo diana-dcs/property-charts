@@ -28,6 +28,7 @@ import {
   updateDistributionButtons,
   ControlRefs,
   ControlCallbacks,
+  syncControlsToConfig,
 } from "./ChartViewControls";
 
 export const VIEW_TYPE_CHART = "property-charts-view";
@@ -59,6 +60,7 @@ export class ChartView extends ItemView {
   private controlRefs: ControlRefs | null = null;
   private heatmapYear: number = new Date().getFullYear();
   private yearNavContainer: HTMLElement | null = null;
+  private yearLabel: HTMLElement | null = null;
   private segmentColorSection: HTMLElement | null = null;
   private segmentLabels: string[] = [];
   private limitOverride = false;
@@ -119,18 +121,18 @@ export class ChartView extends ItemView {
     this.yearNavContainer.hide();
     const prevYearBtn = this.yearNavContainer.createEl("button", { text: "←", cls: CSS.toggleBtn });
     prevYearBtn.setAttribute("aria-label", "Previous year");
-    const yearLabel = this.yearNavContainer.createSpan();
-    yearLabel.setText(String(this.heatmapYear));
+    this.yearLabel = this.yearNavContainer.createSpan();
+    this.yearLabel.setText(String(this.heatmapYear));
     const nextYearBtn = this.yearNavContainer.createEl("button", { text: "→", cls: CSS.toggleBtn });
     nextYearBtn.setAttribute("aria-label", "Next year");
     prevYearBtn.onclick = handle(async () => {
       this.heatmapYear--;
-      yearLabel.setText(String(this.heatmapYear));
+      this.yearLabel?.setText(String(this.heatmapYear));
       await this.refresh();
     });
     nextYearBtn.onclick = handle(async () => {
       this.heatmapYear++;
-      yearLabel.setText(String(this.heatmapYear));
+      this.yearLabel?.setText(String(this.heatmapYear));
       await this.refresh();
     });
 
@@ -170,6 +172,7 @@ export class ChartView extends ItemView {
       this.updateConfig({ folder: settings.defaultFolder });
       if (this.controlRefs) {
         populateFolderSelect(this.controlRefs.folderSelect, this.config, this.collector);
+        this.syncControls();
         this.rebuildPropertySelects();
       }
       this.scheduleRefresh();
@@ -204,17 +207,27 @@ export class ChartView extends ItemView {
     onConfigChange: (patch) => this.updateConfig(patch),
     onRefresh: () => this.refresh(),
     onRebuildPropertySelects: () => this.rebuildPropertySelects(),
+    onControlsChanged: () => this.syncControls(),
     onReset: () => this.resetConfig(),
   };
+
+  /** Re-renders the controls from the config, after it changed for any reason. */
+  private syncControls(): void {
+    if (this.controlRefs) syncControlsToConfig(this.controlRefs, this.config);
+  }
 
   /** Replaces the owned config with an updated copy. The only writer. */
   private updateConfig(patch: Partial<ChartConfig>): void {
     this.config = { ...this.config, ...patch };
   }
 
+  /** Returns every control to the defaults currently configured in the settings. */
   private resetConfig(): void {
     this.updateConfig({
       type: this.settings.defaultChartType,
+      // The folder belongs to the reset too: leaving the previous one in place made
+      // "Reset" look like it had only half worked.
+      folder: this.settings.defaultFolder,
       properties: [""],
       colors: [CHART_COLORS_HEX[0]],
       dateFormat: this.settings.defaultDateFormat,
@@ -223,6 +236,14 @@ export class ChartView extends ItemView {
     this.heatmapYear = new Date().getFullYear();
     this.limitOverride = false;
     this.shape = PERMISSIVE_SHAPE;
+
+    if (this.controlRefs) {
+      // The folder list itself is rebuilt, since the default folder has to be
+      // selectable even if the user had never picked it.
+      populateFolderSelect(this.controlRefs.folderSelect, this.config, this.collector);
+    }
+    this.syncControls();
+    this.yearLabel?.setText(String(this.heatmapYear));
     this.rebuildPropertySelects();
     void this.refresh();
   }

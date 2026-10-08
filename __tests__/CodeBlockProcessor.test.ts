@@ -473,3 +473,102 @@ describe("buildConfig — a bare `year:` carries no value but still signals inte
     ).toThrow(/only applies to heatmaps/);
   });
 });
+
+// ============================================================
+// Refresh scope
+// ============================================================
+
+/**
+ * A theme change asks for every chart to be redrawn, a file change only for the charts
+ * reading that file's folder. Obsidian's debounce invokes its callback with the arguments
+ * of the *last* call, so passing the scope as an argument meant a file change arriving in
+ * the same window could narrow a pending theme refresh and drop it for every other chart.
+ */
+describe("requestRefresh — the pending scope accumulates", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  /** Lets the debounced flush run, then settles the promises it started. */
+  const flush = async () => {
+    jest.runAllTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  interface Entry {
+    folder: string;
+    refreshed: number;
+  }
+
+  function withEntries(folders: string[]) {
+    const proc = new CodeBlockProcessor(mockApp, DEFAULT_SETTINGS);
+    const entries = folders.map<Entry>((folder) => ({ folder, refreshed: 0 }));
+
+    // The registry process() would have filled in, which needs a DOM.
+    const callbacks = (proc as unknown as {
+      refreshCallbacks: Map<object, { folder: string; refresh: () => Promise<boolean> }>;
+    }).refreshCallbacks;
+
+    entries.forEach((entry) => {
+      callbacks.set({ isConnected: true }, {
+        folder: entry.folder,
+        refresh: () => {
+          entry.refreshed++;
+          return Promise.resolve(true);
+        },
+      });
+    });
+
+    return { proc, entries };
+  }
+
+  test("a file change refreshes only the charts covering it", async () => {
+    const { proc, entries } = withEntries(["Daily", "Weekly"]);
+
+    proc.requestRefresh("Daily/2026-01-01.md");
+    await flush();
+
+    expect(entries.map((e) => e.refreshed)).toEqual([1, 0]);
+  });
+
+  test("no path means every chart", async () => {
+    const { proc, entries } = withEntries(["Daily", "Weekly"]);
+
+    proc.requestRefresh();
+    await flush();
+
+    expect(entries.map((e) => e.refreshed)).toEqual([1, 1]);
+  });
+
+  // The theme-change regression: an unrelated file change must not shrink it.
+  test("a later file change cannot narrow a pending refresh of everything", async () => {
+    const { proc, entries } = withEntries(["Daily", "Weekly"]);
+
+    proc.requestRefresh();
+    proc.requestRefresh("Daily/2026-01-01.md");
+    await flush();
+
+    expect(entries.map((e) => e.refreshed)).toEqual([1, 1]);
+  });
+
+  test("several file changes are combined rather than replaced", async () => {
+    const { proc, entries } = withEntries(["Daily", "Weekly", "Monthly"]);
+
+    proc.requestRefresh("Daily/a.md");
+    proc.requestRefresh("Weekly/b.md");
+    await flush();
+
+    expect(entries.map((e) => e.refreshed)).toEqual([1, 1, 0]);
+  });
+
+  test("the scope is cleared once flushed", async () => {
+    const { proc, entries } = withEntries(["Daily", "Weekly"]);
+
+    proc.requestRefresh();
+    await flush();
+    proc.requestRefresh("Daily/a.md");
+    await flush();
+
+    expect(entries.map((e) => e.refreshed)).toEqual([2, 1]);
+  });
+});

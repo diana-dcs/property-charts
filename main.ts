@@ -1,5 +1,6 @@
 import { AbstractInputSuggest, Plugin, PluginSettingTab, App, Setting, SettingDefinitionItem, TFile, debounce } from "obsidian";
 import { VIEW_TYPE_CHART, ChartView } from "./src/ChartView";
+import { themeSignature } from "./src/color";
 import { CodeBlockProcessor, CODE_BLOCK_LANGUAGE } from "./src/CodeBlockProcessor";
 import {
   CHART_TYPE_LABELS,
@@ -18,10 +19,16 @@ function isSettingsKey(key: string): key is keyof PluginSettings {
   return Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key);
 }
 
+/** How many frames to wait for a theme change to take effect before drawing anyway. */
+const THEME_SETTLE_FRAMES = 20;
+
 export default class ChartPlugin extends Plugin {
   // Both are assigned in onload(), before any other plugin code can run.
   settings!: PluginSettings;
   private codeBlockProcessor!: CodeBlockProcessor;
+  /** Theme colours the charts were last drawn with, to detect a real theme change. */
+  private themeSignature = "";
+  private unloaded = false;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -76,18 +83,40 @@ export default class ChartPlugin extends Plugin {
         })
       );
       // Chart colours are read from theme CSS variables at render time, so a
-      // theme / dark-light switch needs a re-render. One frame of delay lets
-      // Obsidian apply the new stylesheet before getComputedStyle() runs.
+      // theme / dark-light switch needs a re-render.
+      this.themeSignature = themeSignature();
       this.registerEvent(
-        this.app.workspace.on("css-change", () => {
-          window.requestAnimationFrame(() => this.refreshViews());
-        })
+        this.app.workspace.on("css-change", () => this.refreshAfterThemeApplied())
       );
     });
   }
 
   onunload(): void {
-    this.codeBlockProcessor.scheduleRefreshAll.cancel();
+    this.unloaded = true;
+    this.codeBlockProcessor.cancelPendingRefresh();
+  }
+
+  /**
+   * Re-renders once the new theme's variables are actually readable.
+   *
+   * `css-change` fires before Obsidian has necessarily swapped the stylesheet in, and the
+   * charts read their colours through getComputedStyle. Drawing too early bakes the old
+   * theme's colours into the canvas, where no later CSS change can correct them — so wait
+   * for the values to change instead of assuming one frame is enough.
+   */
+  private refreshAfterThemeApplied(framesLeft = THEME_SETTLE_FRAMES): void {
+    if (this.unloaded) return;
+
+    const signature = themeSignature();
+    if (signature !== this.themeSignature || framesLeft <= 0) {
+      // On the last frame, re-render regardless: the change may have been to variables
+      // the charts do not read (a snippet, a font), which still warrants a redraw.
+      this.themeSignature = signature;
+      this.refreshViews();
+      return;
+    }
+
+    window.requestAnimationFrame(() => this.refreshAfterThemeApplied(framesLeft - 1));
   }
 
   private async activateView(): Promise<void> {
@@ -126,7 +155,7 @@ export default class ChartPlugin extends Plugin {
       }
     });
 
-    this.codeBlockProcessor.scheduleRefreshAll(file?.path);
+    this.codeBlockProcessor.requestRefresh(file?.path);
   }
 
   async loadSettings(): Promise<void> {

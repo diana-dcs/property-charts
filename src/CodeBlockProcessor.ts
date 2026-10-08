@@ -197,16 +197,41 @@ export class CodeBlockProcessor {
     }
   }
 
-  // Re-render all embedded charts with fresh data (called on vault changes)
-  readonly scheduleRefreshAll = debounce(async (changedFilePath?: string) => {
+  /**
+   * What the pending refresh covers: the paths that changed, or `null` for "every chart",
+   * which a theme change needs.
+   *
+   * Accumulated here rather than passed to the debouncer, because Obsidian's debounce
+   * runs the callback with the arguments of the *last* call. A file change landing in the
+   * same window as a theme change would otherwise narrow the refresh to that file's
+   * folder and silently drop the theme re-render for every other chart.
+   */
+  private pendingPaths: Set<string> | null = new Set();
+
+  /** Queues a refresh. No path means every chart, whatever else is already queued. */
+  requestRefresh(changedFilePath?: string): void {
+    if (changedFilePath === undefined) this.pendingPaths = null;
+    else this.pendingPaths?.add(changedFilePath);
+    this.flushRefresh();
+  }
+
+  cancelPendingRefresh(): void {
+    this.flushRefresh.cancel();
+  }
+
+  // Re-render embedded charts with fresh data (called on vault and theme changes).
+  private readonly flushRefresh = debounce(async () => {
+    const paths = this.pendingPaths;
+    this.pendingPaths = new Set();
+
     const toRefresh: Array<() => Promise<boolean>> = [];
     for (const [el, entry] of this.refreshCallbacks) {
       // Detached blocks (e.g. scrolled out of a virtualized reading view) are cleaned
       // up by their MarkdownRenderChild; just skip them here.
       if (!el.isConnected) continue;
-      if (changedFilePath) {
-        if (!isInFolder(changedFilePath, entry.folder)) continue;
-      }
+      const affected =
+        paths === null || [...paths].some((path) => isInFolder(path, entry.folder));
+      if (!affected) continue;
       toRefresh.push(entry.refresh);
     }
     await Promise.all(toRefresh.map((refresh) => refresh()));

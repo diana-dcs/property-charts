@@ -1,5 +1,6 @@
 import {
   ALL_RANGE_PRESETS,
+  RangePreset,
   CHART_COLORS_HEX,
   CHART_TYPE_LABELS,
   CSS,
@@ -27,11 +28,45 @@ export interface ControlRefs {
   propSection: HTMLElement;
   dataHint: HTMLElement;
   addBtn: HTMLButtonElement;
-  heatmapBtn: HTMLButtonElement;
+  /** Every chart-type button, keyed by the type it selects. */
+  typeBtns: Map<ChartType, HTMLButtonElement>;
   heatmapHint: HTMLElement;
   singleDatasetHint: HTMLElement;
-  distributionBtns: Map<ChartType, HTMLButtonElement>;
   rangeSection: HTMLElement;
+  rangePresetBtns: Map<RangePreset, HTMLButtonElement>;
+  customRangeBtn: HTMLButtonElement;
+  showCustomRange: (visible: boolean) => void;
+  fromInput: HTMLInputElement;
+  toInput: HTMLInputElement;
+  dateError: HTMLElement;
+}
+
+/**
+ * Renders the config into the controls: which buttons look active, what the folder
+ * select shows, whether the custom-range rows are open.
+ *
+ * The single place that does this, so a programmatic change (Reset, or a new default
+ * folder arriving from the settings) shows up in the UI exactly as a click does. The
+ * click handlers used to move the `active` class themselves, which left Reset updating
+ * the chart while the buttons still showed the previous selection.
+ */
+export function syncControlsToConfig(refs: ControlRefs, config: ChartConfig): void {
+  refs.folderSelect.value = config.folder;
+
+  for (const [type, btn] of refs.typeBtns) {
+    btn.toggleClass("active", type === config.type);
+  }
+
+  const isCustomRange = !config.range.preset;
+  for (const [preset, btn] of refs.rangePresetBtns) {
+    btn.toggleClass("active", config.range.preset === preset);
+  }
+  refs.customRangeBtn.toggleClass("active", isCustomRange);
+  refs.showCustomRange(isCustomRange);
+
+  refs.fromInput.value = config.range.from ?? "";
+  refs.toInput.value = config.range.to ?? "";
+  refs.dateError.hide();
 }
 
 export interface ControlCallbacks {
@@ -45,6 +80,8 @@ export interface ControlCallbacks {
   onConfigChange: (patch: Partial<ChartConfig>) => void;
   onRefresh: () => Promise<void>;
   onRebuildPropertySelects: () => void;
+  /** Asks the view to re-render the controls from the config it now holds. */
+  onControlsChanged: () => void;
   onReset: () => void;
 }
 
@@ -56,11 +93,14 @@ export function buildControls(
   const controls = root.createDiv({ cls: CSS.controls });
   const config = callbacks.getConfig();
 
-  return {
+  const refs: ControlRefs = {
     ...buildDataSection(controls, config, collector, callbacks),
-    ...buildVisualizationSection(controls, config, callbacks),
-    rangeSection: buildRangeSection(controls, config, callbacks),
+    ...buildVisualizationSection(controls, callbacks),
+    ...buildRangeSection(controls, callbacks),
   };
+
+  syncControlsToConfig(refs, config);
+  return refs;
 }
 
 type DataSectionRefs = Pick<
@@ -121,12 +161,11 @@ function buildDataSection(
 
 type VisualizationSectionRefs = Pick<
   ControlRefs,
-  "heatmapBtn" | "heatmapHint" | "singleDatasetHint" | "distributionBtns"
+  "typeBtns" | "heatmapHint" | "singleDatasetHint"
 >;
 
 function buildVisualizationSection(
   controls: HTMLElement,
-  config: ChartConfig,
   callbacks: ControlCallbacks
 ): VisualizationSectionRefs {
   const section = createSection(controls, "Visualization");
@@ -140,59 +179,37 @@ function buildVisualizationSection(
   const heatmapHint = section.createDiv({ cls: CSS.hint });
   heatmapHint.hide();
 
-  // All type buttons share one "clear active" operation via this array.
-  const allTypeBtns: HTMLButtonElement[] = [];
-  const clearActive = () => allTypeBtns.forEach((b) => b.removeClass("active"));
+  const typeBtns = new Map<ChartType, HTMLButtonElement>();
+
+  /** One button per chart type; the active marking is applied by syncControlsToConfig. */
+  const addTypeButton = (group: HTMLElement, type: ChartType): void => {
+    const btn = group.createEl("button", { text: CHART_TYPE_LABELS[type], cls: CSS.toggleBtn });
+    btn.onclick = handle(async () => {
+      if (btn.getAttribute("aria-disabled") === "true") return;
+      callbacks.onConfigChange({ type });
+      callbacks.onControlsChanged();
+      await callbacks.onRefresh();
+    });
+    typeBtns.set(type, btn);
+  };
 
   // Row 1: Numeric / time-series types
   const trendRow = section.createDiv({ cls: CSS.row });
   trendRow.createEl("label", { text: "Numeric" });
   const trendGroup = trendRow.createDiv({ cls: CSS.btnGroup });
-
-  TREND_TYPES.forEach((t) => {
-    const btn = trendGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
-    if (t === config.type) btn.addClass("active");
-    btn.onclick = handle(async () => {
-      callbacks.onConfigChange({ type: t });
-      clearActive();
-      btn.addClass("active");
-      await callbacks.onRefresh();
-    });
-    allTypeBtns.push(btn);
-  });
-
-  const heatmapBtn = trendGroup.createEl("button", { text: CHART_TYPE_LABELS["heatmap"], cls: CSS.toggleBtn });
-  if (config.type === "heatmap") heatmapBtn.addClass("active");
-  heatmapBtn.onclick = handle(async () => {
-    if (heatmapBtn.getAttribute("aria-disabled") === "true") return;
-    callbacks.onConfigChange({ type: "heatmap" });
-    clearActive();
-    heatmapBtn.addClass("active");
-    await callbacks.onRefresh();
-  });
-  allTypeBtns.push(heatmapBtn);
+  for (const type of [...TREND_TYPES, "heatmap" as const]) {
+    addTypeButton(trendGroup, type);
+  }
 
   // Row 2: Distribution / text-property types
   const distRow = section.createDiv({ cls: CSS.row });
   distRow.createEl("label", { text: "Distribution" });
   const distGroup = distRow.createDiv({ cls: CSS.btnGroup });
+  for (const type of DISTRIBUTION_TYPES) {
+    addTypeButton(distGroup, type);
+  }
 
-  const distributionBtns = new Map<ChartType, HTMLButtonElement>();
-  DISTRIBUTION_TYPES.forEach((t) => {
-    const btn = distGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
-    if (t === config.type) btn.addClass("active");
-    btn.onclick = handle(async () => {
-      if (btn.getAttribute("aria-disabled") === "true") return;
-      callbacks.onConfigChange({ type: t });
-      clearActive();
-      btn.addClass("active");
-      await callbacks.onRefresh();
-    });
-    allTypeBtns.push(btn);
-    distributionBtns.set(t, btn);
-  });
-
-  return { heatmapBtn, heatmapHint, singleDatasetHint, distributionBtns };
+  return { typeBtns, heatmapHint, singleDatasetHint };
 }
 
 function setButtonDisabled(btn: HTMLButtonElement, disabled: boolean, hintId?: string): void {
@@ -222,8 +239,11 @@ export function updateHeatmapButton(
   if (disabledMulti) title = "Only available for a single dataset";
   else if (textPropertySelected) title = "Heatmap requires numeric or boolean values";
   else if (!hasDates) title = "Heatmap requires notes with dates in their filename or frontmatter";
-  refs.heatmapBtn.setAttribute("title", title);
-  setButtonDisabled(refs.heatmapBtn, disabled, SINGLE_DATASET_HINT_ID);
+  const heatmapBtn = refs.typeBtns.get("heatmap");
+  if (heatmapBtn) {
+    heatmapBtn.setAttribute("title", title);
+    setButtonDisabled(heatmapBtn, disabled, SINGLE_DATASET_HINT_ID);
+  }
 
   // The multi-dataset case already has its own hint, so only the data-shape reasons are
   // spelled out here.
@@ -241,7 +261,9 @@ export function updateDistributionButtons(
   rangeApplies = true
 ): void {
   const multiDataset = activeDatasetCount > 1;
-  for (const btn of refs.distributionBtns.values()) {
+  for (const type of DISTRIBUTION_TYPES) {
+    const btn = refs.typeBtns.get(type);
+    if (!btn) continue;
     btn.setAttribute("title", multiDataset ? "Only available for a single dataset" : "");
     setButtonDisabled(btn, multiDataset, SINGLE_DATASET_HINT_ID);
   }
@@ -264,11 +286,21 @@ export function updateDistributionButtons(
   refs.rangeSection.toggle(rangeMatters);
 }
 
+type RangeSectionRefs = Pick<
+  ControlRefs,
+  | "rangeSection"
+  | "rangePresetBtns"
+  | "customRangeBtn"
+  | "showCustomRange"
+  | "fromInput"
+  | "toInput"
+  | "dateError"
+>;
+
 function buildRangeSection(
   controls: HTMLElement,
-  config: ChartConfig,
   callbacks: ControlCallbacks,
-): HTMLElement {
+): RangeSectionRefs {
   const section = createSection(controls, "Time range");
 
   const dateError = section.createDiv({ cls: CSS.dateError });
@@ -278,51 +310,46 @@ function buildRangeSection(
   presetRow.createEl("label", { text: "Preset" });
   const btnGroup = presetRow.createDiv({ cls: CSS.btnGroup });
 
-  const isCustomActive = !config.range.preset;
-
-  ALL_RANGE_PRESETS.forEach((r) => {
-    const btn = btnGroup.createEl("button", { text: RANGE_PRESET_LABELS[r], cls: CSS.toggleBtn });
-    if (config.range.preset === r) btn.addClass("active");
+  const rangePresetBtns = new Map<RangePreset, HTMLButtonElement>();
+  for (const preset of ALL_RANGE_PRESETS) {
+    const btn = btnGroup.createEl("button", {
+      text: RANGE_PRESET_LABELS[preset],
+      cls: CSS.toggleBtn,
+    });
     btn.onclick = handle(async () => {
-      callbacks.onConfigChange({ range: { preset: r } });
-      btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
-      btn.addClass("active");
-      customBtn.removeClass("active");
-      setCustomRowsVisible(false);
-      dateError.hide();
+      callbacks.onConfigChange({ range: { preset } });
+      callbacks.onControlsChanged();
       await callbacks.onRefresh();
     });
-  });
+    rangePresetBtns.set(preset, btn);
+  }
 
-  const customBtn = btnGroup.createEl("button", { text: "Custom", cls: CSS.toggleBtn });
-  if (isCustomActive) customBtn.addClass("active");
-  customBtn.onclick = () => {
-    btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
-    customBtn.addClass("active");
-    setCustomRowsVisible(true);
-  };
+  const customRangeBtn = btnGroup.createEl("button", { text: "Custom", cls: CSS.toggleBtn });
 
   const fromRow = section.createDiv({ cls: CSS.row });
   fromRow.createEl("label", { text: "From" });
   const fromInput = fromRow.createEl("input", { type: "date", cls: CSS.dateInput });
-  if (config.range.from) fromInput.value = config.range.from;
 
   const toRow = section.createDiv({ cls: CSS.row });
   toRow.createEl("label", { text: "To" });
   const toInput = toRow.createEl("input", { type: "date", cls: CSS.dateInput });
-  if (config.range.to) toInput.value = config.range.to;
 
   const applyRow = section.createDiv({ cls: `${CSS.row} ${CSS.rowEnd}` });
   const applyBtn = applyRow.createEl("button", { text: "Apply custom range", cls: CSS.toggleBtn });
 
-  const setCustomRowsVisible = (visible: boolean) => {
+  const showCustomRange = (visible: boolean) => {
     fromRow.toggle(visible);
     toRow.toggle(visible);
     applyRow.toggle(visible);
   };
 
-  // Show custom fields only when no preset is active (custom range is already set)
-  setCustomRowsVisible(isCustomActive);
+  // Opening the custom rows is a UI state, not a config change: the range only changes
+  // once both dates are filled in and applied.
+  customRangeBtn.onclick = () => {
+    for (const btn of rangePresetBtns.values()) btn.removeClass("active");
+    customRangeBtn.addClass("active");
+    showCustomRange(true);
+  };
 
   applyBtn.onclick = handle(async () => {
     fromInput.removeClass("is-invalid");
@@ -341,14 +368,20 @@ function buildRangeSection(
       dateError.show();
       return;
     }
-    dateError.hide();
     callbacks.onConfigChange({ range: { from: fromInput.value, to: toInput.value } });
-    btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
-    customBtn.addClass("active");
+    callbacks.onControlsChanged();
     await callbacks.onRefresh();
   });
 
-  return section;
+  return {
+    rangeSection: section,
+    rangePresetBtns,
+    customRangeBtn,
+    showCustomRange,
+    fromInput,
+    toInput,
+    dateError,
+  };
 }
 
 /** A copy of `values` with the entry at `index` replaced. */
