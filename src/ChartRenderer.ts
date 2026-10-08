@@ -10,6 +10,7 @@ import {
   DISTRIBUTION_TYPES,
   Dataset,
   stripWikiLinks,
+  toValueStrings,
 } from "./types";
 import { renderHeatmap, renderHeatmapLegend, HEATMAP_WRAPPER_W, computeHeatmapDimensions } from "./HeatmapRenderer";
 
@@ -54,9 +55,8 @@ export class ChartRenderer {
     const dataset = datasets[0];
     if (!dataset) return;
 
-    // The constructor always creates this.canvas, which would fill the container via the
-    // CSS rule "canvas { width:100%; height:100% }". Hide it so it doesn't obscure the
-    // heatmap wrapper below.
+    // The constructor always creates this.canvas, but the heatmap draws on its own canvas
+    // inside the wrapper below. Hide the unused one so it doesn't take up layout space.
     this.canvas.hide();
 
     // Embed: fit to container width (no scroll). Sidebar: fixed width, scrolls horizontally.
@@ -88,14 +88,14 @@ export class ChartRenderer {
 
     // Legend below the chart, still inside the wrapper so it scrolls together.
     const color = this.resolveColor(config, 0);
-    renderHeatmapLegend(wrapper, color, dataset.valueType === "boolean");
+    renderHeatmapLegend(wrapper, color);
 
     const year = config.heatmapYear ?? new Date().getFullYear();
     const isBool = dataset.valueType === "boolean";
     const points = dataset.points
       .filter((p) => p.date !== null)
       .map((p) => ({
-        date: moment(p.date!).format("YYYY-MM-DD"),
+        date: moment(p.date).format("YYYY-MM-DD"),
         value: p.value as number | boolean | null,
       }));
     this.chart = renderHeatmap(canvas, points, color, year, config.range, isBool);
@@ -205,11 +205,7 @@ export class ChartRenderer {
 
     const freq: Record<string, number> = {};
     for (const point of dataset.points) {
-      if (point.rawValue === null || point.rawValue === undefined) continue;
-      const vals = Array.isArray(point.rawValue)
-        ? (point.rawValue as unknown[]).map(String)
-        : [String(point.rawValue)];
-      for (const val of vals) {
+      for (const val of toValueStrings(point.rawValue)) {
         freq[val] = (freq[val] ?? 0) + 1;
       }
     }
@@ -255,7 +251,7 @@ export class ChartRenderer {
           ctx.fillText(String(total), cx, cy);
           ctx.restore();
         },
-      } as Plugin);
+      });
     }
 
     // For polarArea: move legend to bottom (gives the circle more square space),

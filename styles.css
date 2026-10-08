@@ -276,10 +276,8 @@
   position: relative;
 }
 
-.chart-plugin-canvas-container canvas {
-  width: 100% !important;
-  height: 100% !important;
-}
+/* Canvas sizing is left to Chart.js (responsive: true, maintainAspectRatio: false),
+   which writes the pixel dimensions of the container's content box inline. */
 
 .chart-plugin-canvas-container.is-loading {
   opacity: 0.45;
@@ -476,6 +474,5 @@
   font-size: 13px;
   padding: 8px 12px;
   border-left: 3px solid var(--text-error);
-  background: var(--background-modifier-error);
   border-radius: 4px;
 }

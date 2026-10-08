@@ -1,20 +1,28 @@
-import { App, MarkdownPostProcessorContext, MarkdownRenderChild, debounce } from "obsidian";
-import * as yaml from "js-yaml";
-import { ChartConfig, ChartType, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, ALL_CHART_TYPES, RangePreset, PluginSettings, normalizeFolderPath } from "./types";
+import { App, MarkdownPostProcessorContext, MarkdownRenderChild, debounce, parseYaml } from "obsidian";
+import { ChartConfig, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, ALL_CHART_TYPES, RangePreset, PluginSettings, normalizeFolderPath, isChartType, isRangePreset, isValidColor, errorMessage, toDisplayString, toValueStrings } from "./types";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
 
 /** Language identifier of the fenced code block, e.g. ```property-chart */
 export const CODE_BLOCK_LANGUAGE = "property-chart";
 
+/**
+ * The shape of a parsed code block. Every field is `unknown` because the values come
+ * straight from user-authored YAML — buildConfig() is responsible for validating them.
+ */
 interface CodeBlockConfig {
-  type?: ChartType;
-  folder?: string;
-  property?: string | string[];
-  colors?: string | string[];
-  dateFormat?: string;
+  type?: unknown;
+  folder?: unknown;
+  property?: unknown;
+  colors?: unknown;
+  dateFormat?: unknown;
   range?: unknown;
-  year?: number;
+  year?: unknown;
+}
+
+/** Normalizes a scalar-or-list YAML field into a list of non-empty strings. */
+function toStringList(value: unknown): string[] {
+  return toValueStrings(value).filter((item) => item !== "");
 }
 
 export class CodeBlockProcessor {
@@ -58,20 +66,32 @@ export class CodeBlockProcessor {
       if (source.length > 10_000) {
         throw new Error("Config exceeds 10 000 character limit");
       }
-      const parsed = yaml.load(source, { schema: yaml.JSON_SCHEMA });
+      const parsed: unknown = parseYaml(source);
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
         throw new Error("Chart config must be a YAML mapping");
       }
-      raw = parsed as CodeBlockConfig;
+      raw = parsed;
     } catch (e) {
       el.createEl("p", {
-        text: `Invalid YAML configuration: ${(e as Error).message} — check indentation and quotes.`,
+        text: `Invalid YAML configuration: ${errorMessage(e)} — check indentation and quotes.`,
         cls: CSS.error,
       });
       return;
     }
 
-    const config = this.buildConfig(raw);
+    // buildConfig validates every field and throws on bad input (unknown chart type,
+    // invalid dateFormat, range or year). Without this catch the rejection escapes
+    // process() and the code block renders nothing at all — no chart, no message.
+    let config: ChartConfig;
+    try {
+      config = this.buildConfig(raw);
+    } catch (e) {
+      el.createEl("p", {
+        text: `Invalid chart configuration: ${errorMessage(e)}`,
+        cls: CSS.error,
+      });
+      return;
+    }
 
     if (!config.folder) {
       el.createEl("p", {
@@ -106,12 +126,19 @@ export class CodeBlockProcessor {
           : DISTRIBUTION_TYPES.includes(config.type)
           ? { ...config, range: { preset: "all" as RangePreset } }
           : config;
-        const datasets = await this.collector.collectDatasets(collectConfig, limitOverride);
+        // Line/bar go through collectForSeries so a text property renders as a frequency
+        // chart here exactly as it does in the sidebar, instead of reporting an empty
+        // time range for notes that carry no date at all.
+        const isSeries =
+          config.type !== "heatmap" && !DISTRIBUTION_TYPES.includes(config.type);
+        const datasets = isSeries
+          ? (await this.collector.collectForSeries(collectConfig, limitOverride)).datasets
+          : await this.collector.collectDatasets(collectConfig, limitOverride);
         const hasData = datasets.some((d) => d.points.length > 0);
         if (!hasData && config.type !== "heatmap") {
           container.empty();
           container.createEl("p", {
-            text: `No data found for this time range. Try a wider range or check that your date format (${config.dateFormat}) matches your filenames.`,
+            text: this.collector.explainEmptyResult(config),
             cls: CSS.embedNoData,
           });
           return false;
@@ -131,7 +158,7 @@ export class CodeBlockProcessor {
       } catch (e) {
         container.empty();
         container.createEl("p", {
-          text: `Property Charts: ${(e as Error).message}`,
+          text: `Property Charts: ${errorMessage(e)}`,
           cls: CSS.error,
         });
         return false;
@@ -170,25 +197,41 @@ export class CodeBlockProcessor {
   }, 500, true);
 
   buildConfig(raw: CodeBlockConfig): ChartConfig {
-    const properties = Array.isArray(raw.property)
-      ? raw.property
-      : raw.property
-      ? [raw.property]
-      : [];
+    const properties = toStringList(raw.property);
 
-    const range = this.parseRange(raw.range);
-
-    const rawColors = Array.isArray(raw.colors)
-      ? raw.colors
-      : raw.colors
-      ? [raw.colors]
-      : [];
+    const rawColors = toStringList(raw.colors);
+    const badColor = rawColors.find((color) => !isValidColor(color));
+    if (badColor !== undefined) {
+      throw new Error(
+        `Invalid color "${badColor}". Use a hex code (#6384FF), an rgb()/hsl() value or a CSS color name.`
+      );
+    }
 
     const rawType = raw.type ?? this.settings.defaultChartType;
-    if (!ALL_CHART_TYPES.includes(rawType as ChartType)) {
-      throw new Error(`Unknown chart type "${rawType}". Must be one of: ${ALL_CHART_TYPES.join(", ")}`);
+    if (!isChartType(rawType)) {
+      throw new Error(
+        `Unknown chart type "${toDisplayString(rawType)}". Must be one of: ${ALL_CHART_TYPES.join(", ")}`
+      );
     }
-    const type = rawType as ChartType;
+    const type = rawType;
+
+    // `year` only has meaning for heatmaps. Rejecting it elsewhere is better than
+    // accepting a value that is then silently dropped. Keyed on the key's presence,
+    // not its value: a bare `year:` parses to null but still signals intent.
+    const hasYear = Object.prototype.hasOwnProperty.call(raw, "year");
+    if (hasYear && type !== "heatmap") {
+      throw new Error(`"year" only applies to heatmaps, not to the "${type}" chart type.`);
+    }
+    const heatmapYear = this.parseYear(raw.year);
+
+    // A heatmap always shows one full year, so without an explicit `range:` the year
+    // itself is the range. Otherwise the default preset (e.g. 90d) would dim every
+    // cell outside the last 90 days.
+    const hasRange = raw.range !== undefined && raw.range !== null;
+    const range: ChartConfig["range"] =
+      !hasRange && type === "heatmap"
+        ? { from: `${heatmapYear}-01-01`, to: `${heatmapYear}-12-31` }
+        : this.parseRange(raw.range);
 
     // For distribution types, colors map to segments (not to datasets), so preserve all
     // raw colors. For other types, map 1:1 to properties.
@@ -198,13 +241,30 @@ export class CodeBlockProcessor {
 
     return {
       type,
-      folder: normalizeFolderPath(String(raw.folder ?? this.settings.defaultFolder)),
+      folder: normalizeFolderPath(
+        raw.folder === undefined || raw.folder === null
+          ? this.settings.defaultFolder
+          : toDisplayString(raw.folder)
+      ),
       properties,
       colors,
-      dateFormat: this.sanitizeDateFormat(raw.dateFormat ?? this.settings.defaultDateFormat),
+      dateFormat: this.sanitizeDateFormat(
+        raw.dateFormat === undefined || raw.dateFormat === null
+          ? this.settings.defaultDateFormat
+          : toDisplayString(raw.dateFormat)
+      ),
       range,
-      heatmapYear: raw.year ?? new Date().getFullYear(),
+      heatmapYear,
     };
+  }
+
+  private parseYear(year: unknown): number {
+    if (year === undefined || year === null) return new Date().getFullYear();
+    const parsed = typeof year === "number" ? year : Number(toDisplayString(year));
+    if (!Number.isInteger(parsed) || parsed < 1000 || parsed > 9999) {
+      throw new Error(`Invalid year "${toDisplayString(year)}". Expected a four-digit year.`);
+    }
+    return parsed;
   }
 
   private sanitizeDateFormat(format: string): string {
@@ -216,11 +276,10 @@ export class CodeBlockProcessor {
 
   parseRange(range?: unknown): ChartConfig["range"] {
     if (range === undefined || range === null) return { preset: this.settings.defaultRange };
-    const rangeStr = String(range);
+    const rangeStr = toDisplayString(range);
 
-    const presets: RangePreset[] = ["7d", "30d", "90d", "all"];
-    if (presets.includes(rangeStr as RangePreset)) {
-      return { preset: rangeStr as RangePreset };
+    if (isRangePreset(rangeStr)) {
+      return { preset: rangeStr };
     }
 
     // Custom range: "YYYY-MM-DD:YYYY-MM-DD"

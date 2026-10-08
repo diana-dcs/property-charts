@@ -8,6 +8,26 @@ import {
   RangeConfig,
 } from "./types";
 
+/**
+ * Reads a frontmatter value as `unknown`.
+ *
+ * Obsidian types FrontMatterCache with an `any` index signature, so every direct
+ * property access leaks `any` into typed code. This is the single place where that
+ * `any` is converted into `unknown`, forcing callers to narrow explicitly.
+ */
+function readFrontmatterValue(
+  frontmatter: Record<string, unknown>,
+  key: string,
+): unknown {
+  if (!Object.prototype.hasOwnProperty.call(frontmatter, key)) return undefined;
+  return frontmatter[key];
+}
+
+/** Accepts the value types moment can parse; anything else is rejected upfront. */
+function isDateInput(value: unknown): value is string | number | Date {
+  return typeof value === "string" || typeof value === "number" || value instanceof Date;
+}
+
 export class DataCollector {
   private propertiesCache = new Map<string, string[]>();
   private dateCache = new Map<string, Date | null>();
@@ -90,7 +110,7 @@ export class DataCollector {
     return result;
   }
 
-  async collectDatasets(config: ChartConfig, limitOverride = false): Promise<Dataset[]> {
+  collectDatasets(config: ChartConfig, limitOverride = false): Promise<Dataset[]> {
     const files = this.getFilesInFolder(config.folder);
     const limit = (!limitOverride && this.settings.fileLimit > 0)
       ? this.settings.fileLimit
@@ -99,7 +119,7 @@ export class DataCollector {
     const datasets: Dataset[] = config.properties.map((prop) => ({
       property: prop,
       points: [],
-      valueType: "number" as PropertyValueType,
+      valueType: "number",
     }));
 
     const { from: fromStr, to: toStr } = this.resolveRange(config.range);
@@ -132,8 +152,7 @@ export class DataCollector {
       collected++;
 
       for (const dataset of datasets) {
-        if (!Object.prototype.hasOwnProperty.call(cache.frontmatter, dataset.property)) continue;
-        const raw = cache.frontmatter[dataset.property];
+        const raw = readFrontmatterValue(cache.frontmatter, dataset.property);
         if (raw === undefined || raw === null) continue;
 
         const point: DataPoint = {
@@ -163,7 +182,90 @@ export class DataCollector {
       dataset.totalCount = files.length;
     }
 
-    return datasets;
+    return Promise.resolve(datasets);
+  }
+
+  /**
+   * Collects datasets for a line/bar chart, retrying without the range filter when the
+   * property turns out to hold text.
+   *
+   * Text values have no temporal meaning — they are drawn as a frequency chart, which
+   * ignores the range — and the notes carrying them are usually undated, so the range
+   * filter excludes them wholesale. The fallback is only adopted when it really is
+   * text-typed; a numeric property keeps its (correctly) empty result so the user still
+   * learns that the range is too narrow.
+   *
+   * `isTextFallback` tells the caller that the range was not applied, so it can hide the
+   * range controls and leave `range:` out of the exported code block.
+   */
+  async collectForSeries(
+    config: ChartConfig,
+    limitOverride = false,
+  ): Promise<{ datasets: Dataset[]; isTextFallback: boolean }> {
+    const isText = (datasets: Dataset[]): boolean =>
+      datasets.some((d) => d.points.length > 0) && datasets.every((d) => d.valueType === "text");
+
+    const datasets = await this.collectDatasets(config, limitOverride);
+    const unfiltered = config.range.preset === "all";
+
+    // Text data found inside the range: the frequency chart ignores the range anyway, so
+    // widen the collection to match the hidden range controls.
+    if (isText(datasets)) {
+      if (unfiltered) return { datasets, isTextFallback: true };
+      const all = await this.collectDatasets(
+        { ...config, range: { preset: "all" } },
+        limitOverride,
+      );
+      return { datasets: isText(all) ? all : datasets, isTextFallback: true };
+    }
+
+    if (datasets.some((d) => d.points.length > 0) || unfiltered) {
+      return { datasets, isTextFallback: false };
+    }
+
+    // Nothing in range: the property may be text on undated notes, which the range
+    // filter drops entirely.
+    const fallback = await this.collectDatasets(
+      { ...config, range: { preset: "all" } },
+      limitOverride,
+    );
+    return isText(fallback)
+      ? { datasets: fallback, isTextFallback: true }
+      : { datasets, isTextFallback: false };
+  }
+
+  /**
+   * Explains why a collection came back empty. "No data in this time range" is only
+   * one of several causes, and it is the misleading answer for the most common one:
+   * a mistyped property name.
+   */
+  explainEmptyResult(config: ChartConfig): string {
+    const folderLabel = config.folder === "" ? "/" : config.folder;
+
+    const files = this.getFilesInFolder(config.folder);
+    if (files.length === 0) {
+      return `No markdown notes found in "${folderLabel}".`;
+    }
+
+    const available = this.getPropertiesInFolder(config.folder);
+    const missing = config.properties.filter((prop) => !available.includes(prop));
+    if (missing.length > 0) {
+      const names = missing.map((prop) => `"${prop}"`).join(", ");
+      const subject = missing.length === 1 ? "Property" : "Properties";
+      if (available.length === 0) {
+        return `${subject} ${names} not found — no note in "${folderLabel}" has frontmatter properties.`;
+      }
+      const shown = available.slice(0, 15).join(", ");
+      const more = available.length > 15 ? ", …" : "";
+      return `${subject} ${names} not found in "${folderLabel}". Available: ${shown}${more}.`;
+    }
+
+    const anyDated = files.some((file) => this.resolveDate(file, config.dateFormat) !== null);
+    if (!anyDated) {
+      return `No note has a readable date. Check that dateFormat (${config.dateFormat}) matches your filenames or the frontmatter "date" property.`;
+    }
+
+    return `No data in the selected time range. Try a wider range such as range: all.`;
   }
 
   private static readonly FALLBACK_DATE_FORMATS = [
@@ -187,16 +289,15 @@ export class DataCollector {
     const cache = this.app.metadataCache.getFileCache(file);
 
     // 1. Try frontmatter 'date' property
-    if (cache?.frontmatter?.date) {
-      const parsed = moment(cache.frontmatter.date, dateFormat, true);
+    const fmDate = cache?.frontmatter
+      ? readFrontmatterValue(cache.frontmatter, "date")
+      : undefined;
+    if (isDateInput(fmDate)) {
+      const parsed = moment(fmDate, dateFormat, true);
       if (parsed.isValid()) return parsed.toDate();
 
       // Try common formats as strict fallback (no lenient parse)
-      const fallback = moment(
-        cache.frontmatter.date,
-        DataCollector.FALLBACK_DATE_FORMATS,
-        true,
-      );
+      const fallback = moment(fmDate, DataCollector.FALLBACK_DATE_FORMATS, true);
       if (fallback.isValid()) return fallback.toDate();
     }
 

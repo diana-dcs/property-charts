@@ -132,13 +132,8 @@ describe("renderHeatmap", () => {
 // ── renderHeatmapLegend ─────────────────────────────────────────────────────
 
 describe("renderHeatmapLegend", () => {
-  it("does not throw for a numeric property", () => {
+  it.each(["#6384FF", "#4BC0C0"])("does not throw for color %s", (color) => {
     const container = makeElement("div");
-    expect(() => renderHeatmapLegend(container, "#6384FF", false)).not.toThrow();
-  });
-
-  it("does not throw for a boolean property", () => {
-    const container = makeElement("div");
-    expect(() => renderHeatmapLegend(container, "#4BC0C0", true)).not.toThrow();
+    expect(() => renderHeatmapLegend(container, color)).not.toThrow();
   });
 });

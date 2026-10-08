@@ -9,7 +9,7 @@
 
 import { CodeBlockProcessor } from "../src/CodeBlockProcessor";
 import { DEFAULT_SETTINGS } from "../src/types";
-import * as yaml from "js-yaml";
+import { parseYaml } from "obsidian";
 
 // Minimal app mock — CodeBlockProcessor only uses app.metadataCache in process(),
 // which we don't test here (requires DOM). buildConfig/parseRange are pure functions.
@@ -145,19 +145,56 @@ describe("US-06: Chart type config", () => {
 // Security: YAML & Config Injection
 // ============================================================
 
-describe("Security: YAML schema enforcement", () => {
-  test("js-yaml JSON_SCHEMA rejects !!js/function tags", () => {
-    const maliciousYaml = `type: !!js/function 'function(){ return "pwned"; }'`;
-    expect(() => yaml.load(maliciousYaml, { schema: yaml.JSON_SCHEMA })).toThrow();
+// Parsing is delegated to Obsidian's parseYaml, so the YAML schema is no longer ours
+// to enforce. These tests cover buildConfig's own validation instead — the layer that
+// has to treat every parsed field as untrusted.
+describe("Security: config validation of untrusted fields", () => {
+  test("a non-string type is rejected rather than cast through", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", type: { evil: true } })
+    ).toThrow(/Unknown chart type/);
   });
 
-  test("__proto__ key in YAML does not pollute Object prototype", () => {
-    yaml.load("__proto__:\n  isAdmin: true\n", { schema: yaml.JSON_SCHEMA });
+  test("an object type is reported without '[object Object]' leaking into the message", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", type: { evil: true } })
+    ).toThrow(/\{"evil":true\}/);
+  });
+
+  test("an object property name is stringified, never passed through as an object", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: { a: 1 } });
+    expect(config.properties).toEqual(['{"a":1}']);
+    expect(typeof config.properties[0]).toBe("string");
+  });
+
+  test("a non-numeric year is rejected", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", type: "heatmap", year: "not-a-year" })
+    ).toThrow(/Invalid year/);
+  });
+
+  test("an out-of-range year is rejected", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", type: "heatmap", year: 12345 })
+    ).toThrow(/Invalid year/);
+  });
+
+  test("a numeric string year is accepted and normalized to a number", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", type: "heatmap", year: "2024" });
+    expect(config.heatmapYear).toBe(2024);
+  });
+
+  test("a __proto__ key in the parsed config does not pollute Object prototype", () => {
+    const polluted = JSON.parse('{"__proto__":{"isAdmin":true},"folder":"Notes","property":"x"}');
+    processor.buildConfig(polluted);
     expect((({}) as any).isAdmin).toBeUndefined();
   });
 
-  test("constructor key in YAML does not pollute prototype", () => {
-    yaml.load("constructor:\n  prototype:\n    isAdmin: true\n", { schema: yaml.JSON_SCHEMA });
+  test("a constructor key in the parsed config does not pollute Object prototype", () => {
+    const polluted = JSON.parse(
+      '{"constructor":{"prototype":{"isAdmin":true}},"folder":"Notes","property":"x"}'
+    );
+    processor.buildConfig(polluted);
     expect((({}) as any).isAdmin).toBeUndefined();
   });
 });
@@ -263,5 +300,176 @@ describe("buildConfig — range edge cases", () => {
   test("null range falls back to default preset", () => {
     const config = processor.buildConfig({ folder: "Notes", property: "x", range: null as any });
     expect(config.range).toEqual({ preset: DEFAULT_SETTINGS.defaultRange });
+  });
+});
+
+// ============================================================
+// process(): a rejected config must always surface a message
+// ============================================================
+
+// Minimal element/context stubs — process() only needs the element-creation helpers.
+function makeElement(): HTMLElement & { children: HTMLElement[]; text: string } {
+  const el = {
+    text: "",
+    cls: "",
+    children: [] as HTMLElement[],
+    addClass: jest.fn(),
+    empty: jest.fn(),
+    isConnected: true,
+    createEl: jest.fn((_tag: string, opts?: { text?: string; cls?: string }) => {
+      const child = makeElement();
+      child.text = opts?.text ?? "";
+      child.cls = opts?.cls ?? "";
+      el.children.push(child as unknown as HTMLElement);
+      return child;
+    }),
+    createDiv: jest.fn(() => {
+      const child = makeElement();
+      el.children.push(child as unknown as HTMLElement);
+      return child;
+    }),
+  };
+  return el as unknown as HTMLElement & { children: HTMLElement[]; text: string };
+}
+
+const mockCtx = { addChild: jest.fn() } as any;
+
+describe("process — invalid configs render an error instead of nothing", () => {
+  beforeEach(() => {
+    jest.mocked(parseYaml).mockReset();
+  });
+
+  // Regression: buildConfig() used to be called outside any try/catch, so a rejected
+  // config threw out of process() and the code block rendered neither chart nor error.
+  test.each([
+    ["an unknown chart type", { folder: "Notes", property: "x", type: "bla" }, /Unknown chart type/],
+    ["an invalid dateFormat", { folder: "Notes", property: "x", dateFormat: "¡¿*" }, /Invalid dateFormat/],
+    ["an invalid range", { folder: "Notes", property: "x", range: "last-tuesday" }, /Invalid range/],
+    ["an invalid year", { folder: "Notes", property: "x", type: "heatmap", year: "nope" }, /Invalid year/],
+    ["year on a non-heatmap type", { folder: "Notes", property: "x", type: "line", year: 2024 }, /only applies to heatmaps/],
+    ["an invalid color", { folder: "Notes", property: "x", colors: "bla" }, /Invalid color/],
+  ])("reports %s", async (_label, parsed, expected) => {
+    jest.mocked(parseYaml).mockReturnValue(parsed);
+    const el = makeElement();
+
+    await expect(processor.process("<stubbed>", el, mockCtx)).resolves.toBeUndefined();
+
+    const messages = (el as any).children.map((c: any) => c.text).join("\n");
+    expect(messages).toMatch(expected);
+    expect(messages).toMatch(/Invalid chart configuration/);
+  });
+
+  test("a non-mapping YAML document reports a mapping error", async () => {
+    jest.mocked(parseYaml).mockReturnValue(["not", "a", "mapping"]);
+    const el = makeElement();
+
+    await processor.process("<stubbed>", el, mockCtx);
+
+    const messages = (el as any).children.map((c: any) => c.text).join("\n");
+    expect(messages).toMatch(/must be a YAML mapping/);
+  });
+
+  test("a YAML parse failure reports the parser's message", async () => {
+    jest.mocked(parseYaml).mockImplementation(() => {
+      throw new Error("bad indentation");
+    });
+    const el = makeElement();
+
+    await processor.process("<stubbed>", el, mockCtx);
+
+    const messages = (el as any).children.map((c: any) => c.text).join("\n");
+    expect(messages).toMatch(/Invalid YAML configuration: bad indentation/);
+  });
+});
+
+// ============================================================
+// buildConfig: colors, year and heatmap range defaults
+// ============================================================
+
+describe("buildConfig — color validation", () => {
+  test.each([
+    "#6384FF", "#fff", "#6384FFAA", "rgb(1,2,3)", "rgba(1, 2, 3, 0.5)",
+    "hsl(120, 50%, 50%)", "red", "TRANSPARENT",
+  ])("accepts %s", (color) => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", colors: color });
+    expect(config.colors[0]).toBe(color);
+  });
+
+  test.each(["bla", "#12", "#gggggg", "123456", "rgb(", "  "])("rejects %s", (color) => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", colors: color })
+    ).toThrow(/Invalid color/);
+  });
+
+  test("the offending color is named in the message, not just the first one", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: ["a", "b"], colors: ["#fff", "nope"] })
+    ).toThrow(/Invalid color "nope"/);
+  });
+});
+
+describe("buildConfig — year is heatmap-only", () => {
+  test.each(["line", "bar", "pie", "doughnut", "polarArea"])(
+    "year is rejected for type %s",
+    (type) => {
+      expect(() =>
+        processor.buildConfig({ folder: "Notes", property: "x", type, year: 2024 })
+      ).toThrow(/only applies to heatmaps/);
+    }
+  );
+
+  test("year is accepted for heatmap", () => {
+    const config = processor.buildConfig({
+      folder: "Notes", property: "x", type: "heatmap", year: 2024,
+    });
+    expect(config.heatmapYear).toBe(2024);
+  });
+});
+
+describe("buildConfig — heatmap range defaults to the displayed year", () => {
+  // Regression: the default preset (90d) used to survive into the heatmap, which dims
+  // every cell outside it — so setting `year:` appeared to do nothing.
+  test("without an explicit range the year's bounds are used", () => {
+    const config = processor.buildConfig({
+      folder: "Notes", property: "x", type: "heatmap", year: 2024,
+    });
+    expect(config.range).toEqual({ from: "2024-01-01", to: "2024-12-31" });
+  });
+
+  test("an explicit range still wins", () => {
+    const config = processor.buildConfig({
+      folder: "Notes", property: "x", type: "heatmap", year: 2024, range: "30d",
+    });
+    expect(config.range).toEqual({ preset: "30d" });
+  });
+
+  test("non-heatmap types keep the default preset", () => {
+    const config = processor.buildConfig({ folder: "Notes", property: "x", type: "line" });
+    expect(config.range).toEqual({ preset: DEFAULT_SETTINGS.defaultRange });
+  });
+});
+
+describe("buildConfig — a bare `year:` carries no value but still signals intent", () => {
+  // `year:` with nothing after it parses to null. On a heatmap that means "current
+  // year"; on any other type it is still a misconception worth reporting.
+  test("a bare year on a heatmap falls back to the current year", () => {
+    const config = processor.buildConfig({
+      folder: "Notes", property: "x", type: "heatmap", year: null,
+    });
+    expect(config.heatmapYear).toBe(new Date().getFullYear());
+  });
+
+  test("a bare year on a heatmap matches omitting it entirely", () => {
+    const bare = processor.buildConfig({
+      folder: "Notes", property: "x", type: "heatmap", year: null,
+    });
+    const omitted = processor.buildConfig({ folder: "Notes", property: "x", type: "heatmap" });
+    expect(bare).toEqual(omitted);
+  });
+
+  test("a bare year on a non-heatmap type is rejected, just like an explicit one", () => {
+    expect(() =>
+      processor.buildConfig({ folder: "Notes", property: "x", type: "line", year: null })
+    ).toThrow(/only applies to heatmaps/);
   });
 });

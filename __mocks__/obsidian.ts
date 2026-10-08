@@ -34,6 +34,15 @@ export class MarkdownRenderChild extends Component {
   }
 }
 
+/**
+ * Stand-in for Obsidian's parseYaml. Deliberately not a YAML parser — tests that drive
+ * process() set the parsed result directly with mockReturnValue, so they exercise our
+ * own validation rather than a half-faithful parser.
+ */
+export const parseYaml = jest.fn((_source: string): unknown => {
+  throw new Error("parseYaml mock has no configured return value");
+});
+
 export function normalizePath(path: string): string {
   return path
     .replace(/[\\/]+/g, "/")

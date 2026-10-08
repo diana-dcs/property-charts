@@ -4,12 +4,13 @@
     "inlineSourceMap": true,
     "inlineSources": true,
     "module": "ESNext",
-    "target": "ES6",
+    "target": "ES2018",
     "allowSyntheticDefaultImports": true,
     "moduleResolution": "node",
     "isolatedModules": true,
-    "strictNullChecks": true,
-    "lib": ["ES6", "DOM"]
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ES2018", "DOM"]
   },
   "include": ["**/*.ts"],
   "exclude": ["__tests__/**", "__mocks__/**", "node_modules/**"]

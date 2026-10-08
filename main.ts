@@ -1,11 +1,28 @@
-import { AbstractInputSuggest, Plugin, PluginSettingTab, App, Setting, TFile, debounce } from "obsidian";
+import { AbstractInputSuggest, Plugin, PluginSettingTab, App, Setting, SettingDefinitionItem, TFile, debounce } from "obsidian";
 import { VIEW_TYPE_CHART, ChartView } from "./src/ChartView";
 import { CodeBlockProcessor, CODE_BLOCK_LANGUAGE } from "./src/CodeBlockProcessor";
-import { ChartType, DEFAULT_SETTINGS, PluginSettings, RangePreset, normalizeFolderPath } from "./src/types";
+import {
+  CHART_TYPE_LABELS,
+  ChartType,
+  DEFAULT_SETTINGS,
+  PluginSettings,
+  RANGE_PRESET_LABELS,
+  RangePreset,
+  isChartType,
+  isRangePreset,
+  normalizeFolderPath,
+  toDisplayString,
+} from "./src/types";
+
+/** Narrows a declarative setting key to a known PluginSettings field. */
+function isSettingsKey(key: string): key is keyof PluginSettings {
+  return Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key);
+}
 
 export default class ChartPlugin extends Plugin {
-  settings: PluginSettings;
-  private codeBlockProcessor: CodeBlockProcessor;
+  // Both are assigned in onload(), before any other plugin code can run.
+  settings!: PluginSettings;
+  private codeBlockProcessor!: CodeBlockProcessor;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -21,7 +38,7 @@ export default class ChartPlugin extends Plugin {
     // Register ```property-chart code block processor
     this.registerMarkdownCodeBlockProcessor(
       CODE_BLOCK_LANGUAGE,
-      this.codeBlockProcessor.process.bind(this.codeBlockProcessor)
+      (source, el, ctx) => this.codeBlockProcessor.process(source, el, ctx)
     );
 
     // Ribbon icon
@@ -116,7 +133,10 @@ export default class ChartPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // loadData() is typed Promise<any>; narrow once here so the `any` does not
+    // spread through the settings object.
+    const stored = (await this.loadData()) as Partial<PluginSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...stored };
   }
 
   async saveSettings(): Promise<void> {
@@ -127,6 +147,103 @@ export default class ChartPlugin extends Plugin {
 class ChartPluginSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ChartPlugin) {
     super(app, plugin);
+  }
+
+  /**
+   * Declarative settings (Obsidian 1.13.0+) — makes these settings discoverable via
+   * Obsidian's settings search. display() below is kept for older versions, which is
+   * why manifest.json still allows minAppVersion 1.7.2. Both paths read and write the
+   * same PluginSettings fields, and the option labels are shared via types.ts so the
+   * two implementations cannot drift apart.
+   */
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        name: "Default folder",
+        desc: "Folder pre-selected when the sidebar view opens.",
+        control: {
+          type: "folder",
+          key: "defaultFolder",
+          placeholder: "Search folders…",
+          includeRoot: true,
+        },
+      },
+      {
+        name: "Date format",
+        desc: "Moment.js format used to parse dates from filenames and frontmatter.",
+        control: {
+          type: "text",
+          key: "defaultDateFormat",
+          placeholder: DEFAULT_SETTINGS.defaultDateFormat,
+        },
+      },
+      {
+        name: "Default chart type",
+        control: {
+          type: "dropdown",
+          key: "defaultChartType",
+          options: CHART_TYPE_LABELS,
+        },
+      },
+      {
+        name: "Default time range",
+        control: {
+          type: "dropdown",
+          key: "defaultRange",
+          options: RANGE_PRESET_LABELS,
+        },
+      },
+      {
+        name: "File limit per chart",
+        desc: "Maximum number of files processed per chart. A banner appears when the limit is exceeded. Set to 0 for no limit.",
+        control: {
+          type: "number",
+          key: "fileLimit",
+          placeholder: String(DEFAULT_SETTINGS.fileLimit),
+          min: 0,
+        },
+      },
+    ];
+  }
+
+  getControlValue(key: string): unknown {
+    if (!isSettingsKey(key)) return undefined;
+    return this.plugin.settings[key];
+  }
+
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    const settings = this.plugin.settings;
+
+    switch (key) {
+      case "defaultFolder":
+        settings.defaultFolder = normalizeFolderPath(toDisplayString(value));
+        break;
+      case "defaultDateFormat":
+        settings.defaultDateFormat =
+          toDisplayString(value) || DEFAULT_SETTINGS.defaultDateFormat;
+        break;
+      case "defaultChartType":
+        if (!isChartType(value)) return;
+        settings.defaultChartType = value;
+        break;
+      case "defaultRange":
+        if (!isRangePreset(value)) return;
+        settings.defaultRange = value;
+        break;
+      case "fileLimit": {
+        const parsed = Number(value);
+        settings.fileLimit =
+          Number.isFinite(parsed) && parsed >= 0
+            ? Math.floor(parsed)
+            : DEFAULT_SETTINGS.fileLimit;
+        break;
+      }
+      default:
+        return;
+    }
+
+    await this.plugin.saveSettings();
+    this.plugin.applySettingsToViews();
   }
 
   display(): void {
@@ -173,14 +290,7 @@ class ChartPluginSettingTab extends PluginSettingTab {
       .setName("Default chart type")
       .addDropdown((drop) =>
         drop
-          .addOptions({
-            line: "Line",
-            bar: "Bar",
-            heatmap: "Heatmap",
-            pie: "Pie",
-            doughnut: "Doughnut",
-            polarArea: "Polar area",
-          })
+          .addOptions(CHART_TYPE_LABELS)
           .setValue(this.plugin.settings.defaultChartType)
           .onChange(async (value) => {
             this.plugin.settings.defaultChartType = value as ChartType;
@@ -192,7 +302,7 @@ class ChartPluginSettingTab extends PluginSettingTab {
       .setName("Default time range")
       .addDropdown((drop) =>
         drop
-          .addOptions({ "7d": "7 days", "30d": "30 days", "90d": "90 days", all: "All" })
+          .addOptions(RANGE_PRESET_LABELS)
           .setValue(this.plugin.settings.defaultRange)
           .onChange(async (value) => {
             this.plugin.settings.defaultRange = value as RangePreset;

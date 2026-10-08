@@ -36,17 +36,56 @@ export function computeHeatmapDimensions(availW: number): {
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
+  const short = hex.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+  if (short) {
+    return [
+      parseInt(short[1] + short[1], 16),
+      parseInt(short[2] + short[2], 16),
+      parseInt(short[3] + short[3], 16),
+    ];
+  }
   const m = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
   if (!m) return null;
   return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
 }
 
-function parseCssColor(css: string): [number, number, number] {
+/**
+ * Resolves any CSS color (named colors included) to RGB by letting the canvas
+ * normalize it. The heatmap interpolates between two RGB triples, so a color it
+ * cannot parse would silently render as the neutral fallback.
+ */
+function cssColorToRgb(value: string): [number, number, number] | null {
+  if (typeof document?.createElement !== "function") return null;
+  try {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return null;
+    // An unparseable value leaves fillStyle untouched, so an unlikely sentinel
+    // doubles as the failure signal — and never collides with a real request.
+    const sentinel = "#010203";
+    ctx.fillStyle = sentinel;
+    ctx.fillStyle = value;
+    const normalized = ctx.fillStyle;
+    if (typeof normalized !== "string" || normalized === sentinel) return null;
+    return hexToRgb(normalized) ?? parseRgbFunction(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function parseRgbFunction(css: string): [number, number, number] | null {
   const rgb = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (rgb) return [parseInt(rgb[1]), parseInt(rgb[2]), parseInt(rgb[3])];
-  const hex = hexToRgb(css.trim());
-  if (hex) return hex;
-  return [200, 200, 200];
+  return rgb ? [parseInt(rgb[1]), parseInt(rgb[2]), parseInt(rgb[3])] : null;
+}
+
+/** Resolves a user-supplied chart color, trying hex, rgb() and then the canvas. */
+function resolveDataColor(value: string): [number, number, number] | null {
+  const trimmed = value.trim();
+  return hexToRgb(trimmed) ?? parseRgbFunction(trimmed) ?? cssColorToRgb(trimmed);
+}
+
+/** Parses a theme color, falling back to a neutral gray when the variable is unset. */
+function parseCssColor(css: string): [number, number, number] {
+  return parseRgbFunction(css) ?? hexToRgb(css.trim()) ?? [200, 200, 200];
 }
 
 function lerpRgba(
@@ -89,7 +128,7 @@ export function renderHeatmap(
   const emptyColorStr = getComputedStyle(document.body)
     .getPropertyValue("--background-modifier-border").trim() || "#d0d0d0";
   const emptyRgb = parseCssColor(emptyColorStr);
-  const dataRgb = hexToRgb(colorHex) ?? [99, 132, 255];
+  const dataRgb = resolveDataColor(colorHex) ?? [99, 132, 255];
 
   const valueMap = new Map<string, number | boolean | null>();
   for (const pt of data) valueMap.set(pt.date, pt.value);
@@ -237,13 +276,12 @@ export function renderHeatmap(
 /** Appends a "Less ░▒▓█ More" legend row to the given container element. */
 export function renderHeatmapLegend(
   container: HTMLElement,
-  colorHex: string,
-  isBooleanProp: boolean
+  colorHex: string
 ): void {
   const emptyColorStr = getComputedStyle(document.body)
     .getPropertyValue("--background-modifier-border").trim() || "#d0d0d0";
   const emptyRgb = parseCssColor(emptyColorStr);
-  const dataRgb = hexToRgb(colorHex) ?? [99, 132, 255];
+  const dataRgb = resolveDataColor(colorHex) ?? [99, 132, 255];
 
   const legend = container.createDiv({ cls: CSS.heatmapLegend });
   legend.setCssProps({

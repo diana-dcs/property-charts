@@ -1,5 +1,5 @@
 import { ItemView, WorkspaceLeaf, debounce } from "obsidian";
-import { ChartConfig, Dataset, CHART_COLORS_HEX, CSS, CSS_VARS, DISTRIBUTION_TYPES, PluginSettings, RangePreset, stripWikiLinks } from "./types";
+import { ChartConfig, Dataset, CHART_COLORS_HEX, CSS, CSS_VARS, DISTRIBUTION_TYPES, PluginSettings, errorMessage, stripWikiLinks, toValueStrings } from "./types";
 import { computeHeatmapDimensions, HEATMAP_WRAPPER_W } from "./HeatmapRenderer";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
@@ -21,7 +21,8 @@ export class ChartView extends ItemView {
   private config: ChartConfig;
   private renderer: ChartRenderer | null = null;
   private collector: DataCollector;
-  private chartContainer: HTMLElement;
+  // Created in onOpen(), before any render path can reach them.
+  private chartContainer!: HTMLElement;
   private controlRefs: ControlRefs | null = null;
   private datasets: string[] = [""];
   private heatmapYear: number = new Date().getFullYear();
@@ -29,9 +30,17 @@ export class ChartView extends ItemView {
   private segmentColorSection: HTMLElement | null = null;
   private segmentLabels: string[] = [];
   private limitOverride = false;
+  // False while a text property is rendered as a frequency chart: the range filter is
+  // not applied then, so its controls stay hidden and `range:` is left out on export.
+  private rangeApplies = true;
+  // Last known shape of the selected data. Kept on the view so control updates triggered
+  // outside a refresh (e.g. the metadata-cache "resolved" event) don't reset the heatmap
+  // button and its hint to the permissive defaults.
+  private isTextProperty = false;
+  private hasDates = true;
   private limitBanner: HTMLElement | null = null;
-  private bannerContainer: HTMLElement;
-  private emptyStateEl: HTMLElement;
+  private bannerContainer!: HTMLElement;
+  private emptyStateEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, private settings: PluginSettings) {
     super(leaf);
@@ -114,8 +123,9 @@ export class ChartView extends ItemView {
     await this.refresh();
   }
 
-  async onClose(): Promise<void> {
+  onClose(): Promise<void> {
     this.renderer?.destroy();
+    return Promise.resolve();
   }
 
   readonly scheduleRefresh = debounce(async () => {
@@ -149,8 +159,14 @@ export class ChartView extends ItemView {
       }
     );
     const activeCount = this.config.properties.filter(Boolean).length;
-    updateHeatmapButton(this.controlRefs, activeCount);
-    updateDistributionButtons(this.controlRefs, activeCount, this.config.type, activeCount > 0);
+    updateHeatmapButton(this.controlRefs, activeCount, this.isTextProperty, this.hasDates);
+    updateDistributionButtons(
+      this.controlRefs,
+      activeCount,
+      this.config.type,
+      activeCount > 0,
+      this.rangeApplies
+    );
   }
 
   private resetConfig(): void {
@@ -163,6 +179,9 @@ export class ChartView extends ItemView {
     this.datasets.push("");
     this.heatmapYear = new Date().getFullYear();
     this.limitOverride = false;
+    this.rangeApplies = true;
+    this.isTextProperty = false;
+    this.hasDates = true;
     this.rebuildPropertySelects();
     void this.refresh();
   }
@@ -191,8 +210,17 @@ export class ChartView extends ItemView {
         ? `colors: "${exportColors[0]}"`
         : `colors:\n${exportColors.map((c) => `  - "${c}"`).join("\n")}`;
 
+    // Only export `range:` when it actually shaped the chart. Distribution types always
+    // collect every note, a heatmap is bounded by its year, and a text property is drawn
+    // as a frequency chart with the range controls hidden — exporting the stale preset in
+    // those cases would make the embedded block filter out data the sidebar is showing.
+    const rangeExported =
+      !DISTRIBUTION_TYPES.includes(this.config.type) &&
+      this.config.type !== "heatmap" &&
+      this.rangeApplies;
+
     let rangeYaml = "";
-    if (!DISTRIBUTION_TYPES.includes(this.config.type)) {
+    if (rangeExported) {
       if (this.config.range.preset) {
         rangeYaml = `range: ${this.config.range.preset}`;
       } else if (this.config.range.from && this.config.range.to) {
@@ -238,6 +266,14 @@ export class ChartView extends ItemView {
     const isDistribution = DISTRIBUTION_TYPES.includes(this.config.type);
     const hasActiveProperty = activeProperties.length > 0;
 
+    // Without a property there is no data shape to remember, so drop the state from the
+    // previous selection instead of carrying its restrictions over.
+    if (!hasActiveProperty || !this.config.folder) {
+      this.isTextProperty = false;
+      this.hasDates = true;
+      this.rangeApplies = true;
+    }
+
     this.syncEarlyControlState(isHeatmap, hasActiveProperty);
     if (!hasActiveProperty || !this.config.folder) {
       this.rebuildSegmentColorSection([]);
@@ -274,13 +310,16 @@ export class ChartView extends ItemView {
     try {
       const configToRender: ChartConfig = { ...this.config, properties: activeProperties };
       const datasets = await this.collectChartData(configToRender, isHeatmap, isDistribution);
-      this.syncControlState(datasets, configToRender, isHeatmap, isDistribution);
+      // A heatmap collects within its year only, and text notes are typically undated, so
+      // its own result cannot tell a text property from an empty year. Probe separately.
+      const textProbe = isHeatmap ? await this.detectTextProperty(configToRender) : undefined;
+      this.syncControlState(datasets, configToRender, isHeatmap, isDistribution, textProbe);
       await this.renderChartData(configToRender, datasets, isHeatmap);
     } catch (e) {
       console.error("Property Charts: render error", e);
       this.chartContainer.empty();
       this.chartContainer.createEl("p", {
-        text: `Failed to render chart: ${(e as Error).message}`,
+        text: `Failed to render chart: ${errorMessage(e)}`,
         cls: CSS.error,
       });
     } finally {
@@ -293,8 +332,14 @@ export class ChartView extends ItemView {
     this.yearNavContainer?.toggle(isHeatmap);
     if (this.controlRefs) {
       const activeCount = this.config.properties.filter(Boolean).length;
-      updateHeatmapButton(this.controlRefs, activeCount);
-      updateDistributionButtons(this.controlRefs, activeCount, this.config.type, hasActiveProperty);
+      updateHeatmapButton(this.controlRefs, activeCount, this.isTextProperty, this.hasDates);
+      updateDistributionButtons(
+        this.controlRefs,
+        activeCount,
+        this.config.type,
+        hasActiveProperty,
+        this.rangeApplies
+      );
     }
   }
 
@@ -314,28 +359,36 @@ export class ChartView extends ItemView {
         },
       };
     } else if (isDistribution) {
-      collectConfig = { ...configToRender, range: { preset: "all" as RangePreset } };
+      collectConfig = { ...configToRender, range: { preset: "all" } };
     }
 
-    let datasets = await this.collector.collectDatasets(collectConfig, this.limitOverride);
-
-    // For line/bar: if the range filter produced no data, try a full (unfiltered)
-    // collection to see whether the property is text-typed. If it is, use that data
-    // for the frequency chart. If it is numeric, keep the empty result.
-    if (!isHeatmap && !isDistribution && !datasets.some((d) => d.points.length > 0)) {
-      const fallback = await this.collector.collectDatasets({
-        ...configToRender,
-        range: { preset: "all" as RangePreset },
-      });
-      if (
-        fallback.some((d) => d.points.length > 0) &&
-        fallback.every((d) => d.valueType === "text")
-      ) {
-        datasets = fallback;
-      }
+    if (isHeatmap || isDistribution) {
+      return this.collector.collectDatasets(collectConfig, this.limitOverride);
     }
 
+    // Line/bar: text properties are drawn as a frequency chart, which ignores the range.
+    // collectForSeries() reports that case so the range controls and the exported code
+    // block can agree with what is actually rendered.
+    const { datasets, isTextFallback } = await this.collector.collectForSeries(
+      collectConfig,
+      this.limitOverride,
+    );
+    this.rangeApplies = !isTextFallback;
     return datasets;
+  }
+
+  /**
+   * Infers whether the selected properties hold text, independent of the active chart
+   * type and range: the collection runs unfiltered, so undated notes are included.
+   */
+  private async detectTextProperty(config: ChartConfig): Promise<boolean> {
+    const probe = await this.collector.collectDatasets(
+      { ...config, range: { preset: "all" } },
+      this.limitOverride,
+    );
+    return (
+      probe.some((d) => d.points.length > 0) && probe.every((d) => d.valueType === "text")
+    );
   }
 
   private syncControlState(
@@ -343,29 +396,29 @@ export class ChartView extends ItemView {
     configToRender: ChartConfig,
     isHeatmap: boolean,
     isDistribution: boolean,
+    textProbe?: boolean,
   ): void {
-    const allPropsAreText =
-      !isHeatmap && !isDistribution &&
-      datasets.length > 0 &&
-      datasets.every((d) => d.valueType === "text");
-
     const isTextProperty =
-      datasets.some((d) => d.points.length > 0) &&
-      datasets.every((d) => d.valueType === "text");
+      textProbe ??
+      (datasets.some((d) => d.points.length > 0) &&
+        datasets.every((d) => d.valueType === "text"));
+
+    const allPropsAreText = !isDistribution && isTextProperty;
 
     const hasAnyPoints = datasets.some((d) => d.points.length > 0);
     const hasDates =
       !isTextProperty &&
       (!hasAnyPoints || datasets.some((d) => d.points.some((p) => p.date !== null)));
 
+    // Remembered so control updates outside a refresh keep the heatmap locked for text
+    // properties instead of falling back to the permissive parameter defaults.
+    this.isTextProperty = isTextProperty;
+    this.hasDates = hasDates;
+
     if (isDistribution && datasets[0]) {
       const seen = new Set<string>();
       for (const point of datasets[0].points) {
-        if (point.rawValue === null || point.rawValue === undefined) continue;
-        const vals = Array.isArray(point.rawValue)
-          ? (point.rawValue as unknown[]).map(String)
-          : [String(point.rawValue)];
-        for (const val of vals) seen.add(val);
+        for (const val of toValueStrings(point.rawValue)) seen.add(val);
       }
       this.rebuildSegmentColorSection([...seen].sort().map(stripWikiLinks));
     } else {
@@ -378,7 +431,7 @@ export class ChartView extends ItemView {
     }
 
     if (this.controlRefs?.rangeSection && !isHeatmap && !isDistribution) {
-      this.controlRefs.rangeSection.toggle(!allPropsAreText);
+      this.controlRefs.rangeSection.toggle(this.rangeApplies);
     }
 
     if (this.controlRefs?.dataHint) {
@@ -407,7 +460,7 @@ export class ChartView extends ItemView {
     const hasData = datasets.some((d) => d.points.length > 0);
     if (!hasData && !isHeatmap) {
       this.chartContainer.createEl("p", {
-        text: `No data found. Check the time range and that your date format (${configToRender.dateFormat}) matches your filenames.`,
+        text: this.collector.explainEmptyResult(configToRender),
         cls: CSS.noDataMsg,
       });
       // The renderer was already destroyed and reset to null above, so the next
@@ -416,8 +469,18 @@ export class ChartView extends ItemView {
     }
 
     this.renderer = new ChartRenderer(this.chartContainer);
+    // The heatmap shows one full year and its range controls are hidden, so render it
+    // against the year's bounds. Leaving the (invisible) range preset in place would
+    // dim every cell outside it.
     const renderConfig = isHeatmap
-      ? { ...configToRender, heatmapYear: this.heatmapYear }
+      ? {
+          ...configToRender,
+          heatmapYear: this.heatmapYear,
+          range: {
+            from: `${this.heatmapYear}-01-01`,
+            to: `${this.heatmapYear}-12-31`,
+          },
+        }
       : configToRender;
     await this.renderer.render(renderConfig, datasets);
     this.renderer.updateAriaLabel(renderConfig);

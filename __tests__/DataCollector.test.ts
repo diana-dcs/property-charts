@@ -608,3 +608,100 @@ describe("Date resolution: memoization", () => {
     expect(datasets[0].points[0].date?.getFullYear()).toBe(2024);
   });
 });
+
+// ============================================================
+// explainEmptyResult: why a collection came back empty
+// ============================================================
+
+describe("explainEmptyResult", () => {
+  // Regression: every empty result used to be reported as "no data in this time
+  // range", which is the wrong answer for a mistyped property name.
+  test("a mistyped property is named and the available ones are listed", () => {
+    const msg = collector.explainEmptyResult({ ...baseConfig, properties: ["monei"] });
+    expect(msg).toMatch(/Property "monei" not found/);
+    expect(msg).toMatch(/Daily Notes/);
+    expect(msg).toMatch(/sleep/);
+    expect(msg).not.toMatch(/time range/);
+  });
+
+  test("several mistyped properties are reported together", () => {
+    const msg = collector.explainEmptyResult({ ...baseConfig, properties: ["monei", "slep"] });
+    expect(msg).toMatch(/Properties "monei", "slep" not found/);
+  });
+
+  test("an empty folder is reported as such", () => {
+    const emptyApp = makeApp(makeFolder("/", [makeFolder("Empty", [])]), {});
+    const emptyCollector = new DataCollector(emptyApp, DEFAULT_SETTINGS);
+    const msg = emptyCollector.explainEmptyResult({ ...baseConfig, folder: "Empty" });
+    expect(msg).toMatch(/No markdown notes found in "Empty"/);
+  });
+
+  // A merely mistyped dateFormat is usually rescued by FALLBACK_DATE_FORMATS, so this
+  // branch is about notes that carry no recognizable date at all.
+  test("undated notes are reported as a date problem, not a range problem", () => {
+    const undatedFiles = [makeFile("Journal/thoughts.md"), makeFile("Journal/ideas.md")];
+    const undatedApp = makeApp(makeFolder("/", [makeFolder("Journal", undatedFiles)]), {
+      "Journal/thoughts.md": { sleep: 7 },
+      "Journal/ideas.md": { sleep: 8 },
+    });
+    const undatedCollector = new DataCollector(undatedApp, DEFAULT_SETTINGS);
+
+    const msg = undatedCollector.explainEmptyResult({
+      ...baseConfig,
+      folder: "Journal",
+      dateFormat: "DD_MM_YYYY",
+    });
+    expect(msg).toMatch(/No note has a readable date/);
+    expect(msg).toMatch(/DD_MM_YYYY/);
+  });
+
+  test("an existing property with a matching dateFormat falls back to the range hint", () => {
+    const msg = collector.explainEmptyResult(baseConfig);
+    expect(msg).toMatch(/No data in the selected time range/);
+  });
+});
+
+// ============================================================
+// collectForSeries: text properties ignore the range filter
+// ============================================================
+
+describe("collectForSeries", () => {
+  const textFiles = [makeFile("Books/dune.md"), makeFile("Books/ubik.md")];
+  const textApp = makeApp(makeFolder("/", [makeFolder("Books", textFiles)]), {
+    "Books/dune.md": { genre: "Sci-Fi" },
+    "Books/ubik.md": { genre: "Sci-Fi" },
+  });
+  const textCollector = new DataCollector(textApp, DEFAULT_SETTINGS);
+  const textConfig: ChartConfig = {
+    ...baseConfig,
+    folder: "Books",
+    properties: ["genre"],
+    range: { preset: "90d" },
+  };
+
+  test("undated notes with a text property fall back to the full collection", async () => {
+    const { datasets, isTextFallback } = await textCollector.collectForSeries(textConfig);
+    expect(isTextFallback).toBe(true);
+    expect(datasets[0].points).toHaveLength(2);
+    expect(datasets[0].valueType).toBe("text");
+  });
+
+  test("a text property inside the range is still collected unfiltered", async () => {
+    const { datasets, isTextFallback } = await collector.collectForSeries({
+      ...baseConfig,
+      properties: ["mood"],
+      range: { from: "2024-01-10", to: "2024-01-11" },
+    });
+    expect(isTextFallback).toBe(false);
+    expect(datasets[0].points).toHaveLength(2);
+  });
+
+  test("a numeric property keeps its empty result instead of falling back", async () => {
+    const { datasets, isTextFallback } = await collector.collectForSeries({
+      ...baseConfig,
+      range: { from: "2020-01-01", to: "2020-12-31" },
+    });
+    expect(isTextFallback).toBe(false);
+    expect(datasets[0].points).toHaveLength(0);
+  });
+});

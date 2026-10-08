@@ -225,7 +225,9 @@ export function updateDistributionButtons(
   refs: ControlRefs,
   activeDatasetCount: number,
   activeType: ChartType,
-  hasActiveProperty = true
+  hasActiveProperty = true,
+  /** False while a text property is drawn as a frequency chart, which ignores the range. */
+  rangeApplies = true
 ): void {
   const multiDataset = activeDatasetCount > 1;
   for (const btn of [refs.pieBtn, refs.doughnutBtn, refs.polarAreaBtn]) {
@@ -253,6 +255,7 @@ export function updateDistributionButtons(
   if (refs.rangeSection) {
     const hideRange =
       !hasActiveProperty ||
+      !rangeApplies ||
       DISTRIBUTION_TYPES.includes(activeType) ||
       activeType === "heatmap";
     refs.rangeSection.toggle(!hideRange);
