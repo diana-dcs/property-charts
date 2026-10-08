@@ -27,6 +27,7 @@ import {
   updateHeatmapButton,
   updateDistributionButtons,
   ControlRefs,
+  ControlCallbacks,
 } from "./ChartViewControls";
 
 export const VIEW_TYPE_CHART = "property-charts-view";
@@ -101,13 +102,7 @@ export class ChartView extends ItemView {
     // Settings area: scrolls internally when many datasets are added
     const scrollArea = root.createDiv({ cls: CSS.scrollArea });
 
-    this.controlRefs = buildControls(scrollArea, this.collector, {
-      getConfig: () => this.config,
-      onConfigChange: (patch) => this.updateConfig(patch),
-      onRefresh: () => this.refresh(),
-      onRebuildPropertySelects: () => this.rebuildPropertySelects(),
-      onReset: () => this.resetConfig(),
-    });
+    this.controlRefs = buildControls(scrollArea, this.collector, this.controlCallbacks);
     this.rebuildPropertySelects();
 
     // Segment color section – populated dynamically when a distribution type is active.
@@ -187,13 +182,7 @@ export class ChartView extends ItemView {
       this.controlRefs.propSection,
       this.config,
       this.collector,
-      {
-        getConfig: () => this.config,
-        onConfigChange: (patch) => this.updateConfig(patch),
-        onRefresh: () => this.refresh(),
-        onRebuildPropertySelects: () => this.rebuildPropertySelects(),
-        onReset: () => this.resetConfig(),
-      }
+      this.controlCallbacks
     );
     const activeCount = this.activePropertyCount;
     updateHeatmapButton(this.controlRefs, activeCount, this.shape.isText, this.shape.hasDates);
@@ -205,6 +194,18 @@ export class ChartView extends ItemView {
       this.shape.rangeApplies
     );
   }
+
+  /**
+   * What the controls are allowed to do: read the current config and report a change.
+   * Built once, since the property selects are rebuilt often.
+   */
+  private readonly controlCallbacks: ControlCallbacks = {
+    getConfig: () => this.config,
+    onConfigChange: (patch) => this.updateConfig(patch),
+    onRefresh: () => this.refresh(),
+    onRebuildPropertySelects: () => this.rebuildPropertySelects(),
+    onReset: () => this.resetConfig(),
+  };
 
   /** Replaces the owned config with an updated copy. The only writer. */
   private updateConfig(patch: Partial<ChartConfig>): void {
@@ -507,8 +508,7 @@ export class ChartView extends ItemView {
       const row = section.createDiv({ cls: CSS.row });
 
       const colorInput = row.createEl("input", { type: "color", cls: CSS.colorInput });
-      colorInput.value =
-colorAt(this.config.colors, i);
+      colorInput.value = colorAt(this.config.colors, i);
 
       row.createEl("label", { text: label });
 

@@ -3,7 +3,7 @@ import {
   ChartConfig,
   CSS,
   ALL_CHART_TYPES,
-  RangePreset,
+  RangeConfig,
   PluginSettings,
   colorAt,
   normalizeFolderPath,
@@ -19,6 +19,9 @@ import {
 } from "./types";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
+
+/** Distribution charts always count every note, whatever the configured range. */
+const ALL_RANGE: RangeConfig = { preset: "all" };
 
 /** Language identifier of the fenced code block, e.g. ```property-chart */
 export const CODE_BLOCK_LANGUAGE = "property-chart";
@@ -138,7 +141,7 @@ export class CodeBlockProcessor {
               range: yearRange(config.heatmapYear ?? new Date().getFullYear()),
             }
           : isDistributionType(config.type)
-          ? { ...config, range: { preset: "all" as RangePreset } }
+          ? { ...config, range: ALL_RANGE }
           : config;
         // Line/bar go through collectForSeries so a text property renders as a frequency
         // chart here exactly as it does in the sidebar, instead of reporting an empty
