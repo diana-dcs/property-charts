@@ -5,7 +5,10 @@ import {
   Dataset,
   PluginSettings,
   PropertyValueType,
+  RANGE_PRESET_DAYS,
   RangeConfig,
+  isInFolder,
+  isTextDatasets,
 } from "./types";
 
 /**
@@ -45,10 +48,7 @@ export class DataCollector {
       return;
     }
     for (const folder of this.propertiesCache.keys()) {
-      const prefix = folder === "/" ? "" : folder + "/";
-      if (filePath.startsWith(prefix)) {
-        this.propertiesCache.delete(folder);
-      }
+      if (isInFolder(filePath, folder)) this.propertiesCache.delete(folder);
     }
     const datePrefix = filePath + ":";
     for (const key of this.dateCache.keys()) {
@@ -202,21 +202,18 @@ export class DataCollector {
     config: ChartConfig,
     limitOverride = false,
   ): Promise<{ datasets: Dataset[]; isTextFallback: boolean }> {
-    const isText = (datasets: Dataset[]): boolean =>
-      datasets.some((d) => d.points.length > 0) && datasets.every((d) => d.valueType === "text");
-
     const datasets = await this.collectDatasets(config, limitOverride);
     const unfiltered = config.range.preset === "all";
 
     // Text data found inside the range: the frequency chart ignores the range anyway, so
     // widen the collection to match the hidden range controls.
-    if (isText(datasets)) {
+    if (isTextDatasets(datasets)) {
       if (unfiltered) return { datasets, isTextFallback: true };
       const all = await this.collectDatasets(
         { ...config, range: { preset: "all" } },
         limitOverride,
       );
-      return { datasets: isText(all) ? all : datasets, isTextFallback: true };
+      return { datasets: isTextDatasets(all) ? all : datasets, isTextFallback: true };
     }
 
     if (datasets.some((d) => d.points.length > 0) || unfiltered) {
@@ -229,7 +226,7 @@ export class DataCollector {
       { ...config, range: { preset: "all" } },
       limitOverride,
     );
-    return isText(fallback)
+    return isTextDatasets(fallback)
       ? { datasets: fallback, isTextFallback: true }
       : { datasets, isTextFallback: false };
   }
@@ -318,26 +315,18 @@ export class DataCollector {
   private resolveRange(
     range: RangeConfig
   ): { from: string | null; to: string | null } {
-    const today = moment().format("YYYY-MM-DD");
-
     if (range.from && range.to) {
       return { from: range.from, to: range.to };
     }
 
-    if (range.preset === "7d") {
-      return { from: moment().subtract(7, "days").format("YYYY-MM-DD"), to: today };
-    }
+    // 'all' and an absent preset both mean "no bounds".
+    const days = range.preset ? RANGE_PRESET_DAYS[range.preset] : null;
+    if (days === null) return { from: null, to: null };
 
-    if (range.preset === "30d") {
-      return { from: moment().subtract(30, "days").format("YYYY-MM-DD"), to: today };
-    }
-
-    if (range.preset === "90d") {
-      return { from: moment().subtract(90, "days").format("YYYY-MM-DD"), to: today };
-    }
-
-    // 'all' or undefined
-    return { from: null, to: null };
+    return {
+      from: moment().subtract(days, "days").format("YYYY-MM-DD"),
+      to: moment().format("YYYY-MM-DD"),
+    };
   }
 
   private normalizeValue(raw: unknown): number | string | boolean | null {

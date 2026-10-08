@@ -357,82 +357,55 @@
 
 /* ── File limit banner ───────────────────────────────────── */
 
-.chart-plugin-limit-banner {
+/*
+  One layout, two meanings: the truncation warning and the "all loaded" confirmation
+  differ only in color, which the modifiers below supply via --cp-limit-color.
+*/
+.chart-plugin-limit {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
   margin: 0 12px;
-  border: 1px solid var(--text-error);
+  border: 1px solid var(--cp-limit-color);
   border-radius: 4px;
   font-size: 11px;
-  color: var(--text-error);
+  color: var(--cp-limit-color);
   opacity: 0.7;
   white-space: nowrap;
   overflow: hidden;
 }
 
-.chart-plugin-limit-banner span {
+.chart-plugin-limit--warn {
+  --cp-limit-color: var(--text-error);
+}
+
+.chart-plugin-limit--ok {
+  --cp-limit-color: var(--color-green);
+}
+
+.chart-plugin-limit:hover {
+  opacity: 1;
+}
+
+.chart-plugin-limit span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.chart-plugin-limit-banner button {
+.chart-plugin-limit button {
   padding: 1px 6px;
   font-size: 11px;
   border-radius: 4px;
   cursor: pointer;
   background: transparent;
-  border: 1px solid var(--text-error);
-  color: var(--text-error);
+  border: 1px solid var(--cp-limit-color);
+  color: var(--cp-limit-color);
   transition: all 0.12s;
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-.chart-plugin-limit-banner:hover {
-  opacity: 1;
-}
-
-.chart-plugin-limit-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  margin: 0 12px;
-  border: 1px solid var(--color-green);
-  border-radius: 4px;
-  font-size: 11px;
-  color: var(--color-green);
-  opacity: 0.7;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.chart-plugin-limit-chip span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chart-plugin-limit-chip button {
-  padding: 1px 6px;
-  font-size: 11px;
-  border-radius: 4px;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid var(--color-green);
-  color: var(--color-green);
-  transition: all 0.12s;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.chart-plugin-limit-chip:hover {
-  opacity: 1;
 }
 
 /* ── Scroll area (settings panel) ───────────────────────── */

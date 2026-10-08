@@ -1,5 +1,22 @@
 import { App, MarkdownPostProcessorContext, MarkdownRenderChild, debounce, parseYaml } from "obsidian";
-import { ChartConfig, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, ALL_CHART_TYPES, RangePreset, PluginSettings, normalizeFolderPath, isChartType, isRangePreset, isValidColor, errorMessage, toDisplayString, toValueStrings } from "./types";
+import {
+  ChartConfig,
+  CSS,
+  ALL_CHART_TYPES,
+  RangePreset,
+  PluginSettings,
+  colorAt,
+  normalizeFolderPath,
+  isChartType,
+  isDistributionType,
+  isInFolder,
+  isRangePreset,
+  isValidColor,
+  errorMessage,
+  toDisplayString,
+  toValueStrings,
+  yearRange,
+} from "./types";
 import { DataCollector } from "./DataCollector";
 import { ChartRenderer } from "./ChartRenderer";
 
@@ -118,19 +135,16 @@ export class CodeBlockProcessor {
         const collectConfig = config.type === "heatmap"
           ? {
               ...config,
-              range: {
-                from: `${config.heatmapYear ?? new Date().getFullYear()}-01-01`,
-                to: `${config.heatmapYear ?? new Date().getFullYear()}-12-31`,
-              },
+              range: yearRange(config.heatmapYear ?? new Date().getFullYear()),
             }
-          : DISTRIBUTION_TYPES.includes(config.type)
+          : isDistributionType(config.type)
           ? { ...config, range: { preset: "all" as RangePreset } }
           : config;
         // Line/bar go through collectForSeries so a text property renders as a frequency
         // chart here exactly as it does in the sidebar, instead of reporting an empty
         // time range for notes that carry no date at all.
         const isSeries =
-          config.type !== "heatmap" && !DISTRIBUTION_TYPES.includes(config.type);
+          config.type !== "heatmap" && !isDistributionType(config.type);
         const datasets = isSeries
           ? (await this.collector.collectForSeries(collectConfig, limitOverride)).datasets
           : await this.collector.collectDatasets(collectConfig, limitOverride);
@@ -188,8 +202,7 @@ export class CodeBlockProcessor {
       // up by their MarkdownRenderChild; just skip them here.
       if (!el.isConnected) continue;
       if (changedFilePath) {
-        const prefix = entry.folder === "/" ? "" : entry.folder + "/";
-        if (!changedFilePath.startsWith(prefix)) continue;
+        if (!isInFolder(changedFilePath, entry.folder)) continue;
       }
       toRefresh.push(entry.refresh);
     }
@@ -230,14 +243,14 @@ export class CodeBlockProcessor {
     const hasRange = raw.range !== undefined && raw.range !== null;
     const range: ChartConfig["range"] =
       !hasRange && type === "heatmap"
-        ? { from: `${heatmapYear}-01-01`, to: `${heatmapYear}-12-31` }
+        ? yearRange(heatmapYear)
         : this.parseRange(raw.range);
 
     // For distribution types, colors map to segments (not to datasets), so preserve all
     // raw colors. For other types, map 1:1 to properties.
-    const colors = DISTRIBUTION_TYPES.includes(type) && rawColors.length > 0
+    const colors = isDistributionType(type) && rawColors.length > 0
       ? rawColors
-      : properties.map((_, i) => rawColors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length]);
+      : properties.map((_, i) => colorAt(rawColors, i));
 
     return {
       type,

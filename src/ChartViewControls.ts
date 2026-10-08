@@ -1,21 +1,17 @@
-import { ChartConfig, ChartType, CHART_COLORS_HEX, CSS, DISTRIBUTION_TYPES, RangePreset } from "./types";
+import {
+  ALL_RANGE_PRESETS,
+  CHART_COLORS_HEX,
+  CHART_TYPE_LABELS,
+  CSS,
+  ChartConfig,
+  ChartType,
+  RANGE_PRESET_LABELS,
+  DISTRIBUTION_TYPES,
+  TREND_TYPES,
+  colorAt,
+  isDistributionType,
+} from "./types";
 import { DataCollector } from "./DataCollector";
-
-const CHART_TYPE_LABELS: Record<ChartType, string> = {
-  line:      "Line",
-  bar:       "Bar",
-  heatmap:   "Heatmap",
-  pie:       "Pie",
-  doughnut:  "Doughnut",
-  polarArea: "Polar area",
-};
-
-const RANGE_LABELS: Record<string, string> = {
-  "7d":  "7 days",
-  "30d": "30 days",
-  "90d": "90 days",
-  "all": "All",
-};
 
 export interface ControlRefs {
   folderSelect: HTMLSelectElement;
@@ -25,9 +21,7 @@ export interface ControlRefs {
   heatmapBtn?: HTMLButtonElement;
   heatmapHint?: HTMLElement;
   singleDatasetHint?: HTMLElement;
-  pieBtn?: HTMLButtonElement;
-  doughnutBtn?: HTMLButtonElement;
-  polarAreaBtn?: HTMLButtonElement;
+  distributionBtns?: Map<ChartType, HTMLButtonElement>;
   rangeSection?: HTMLElement;
 }
 
@@ -134,7 +128,7 @@ function buildVisualizationSection(
   trendRow.createEl("label", { text: "Numeric" });
   const trendGroup = trendRow.createDiv({ cls: CSS.btnGroup });
 
-  (["line", "bar"] as ChartType[]).forEach((t) => {
+  TREND_TYPES.forEach((t) => {
     const btn = trendGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
     if (t === config.type) btn.addClass("active");
     btn.onclick = async () => {
@@ -163,7 +157,8 @@ function buildVisualizationSection(
   distRow.createEl("label", { text: "Distribution" });
   const distGroup = distRow.createDiv({ cls: CSS.btnGroup });
 
-  (["pie", "doughnut", "polarArea"] as ChartType[]).forEach((t) => {
+  refs.distributionBtns = new Map();
+  DISTRIBUTION_TYPES.forEach((t) => {
     const btn = distGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
     if (t === config.type) btn.addClass("active");
     btn.onclick = async () => {
@@ -174,11 +169,8 @@ function buildVisualizationSection(
       await callbacks.onRefresh();
     };
     allTypeBtns.push(btn);
-    if (t === "pie") refs.pieBtn = btn;
-    else if (t === "doughnut") refs.doughnutBtn = btn;
-    else refs.polarAreaBtn = btn;
+    refs.distributionBtns?.set(t, btn);
   });
-
 }
 
 function setButtonDisabled(btn: HTMLButtonElement, disabled: boolean, hintId?: string): void {
@@ -230,13 +222,12 @@ export function updateDistributionButtons(
   rangeApplies = true
 ): void {
   const multiDataset = activeDatasetCount > 1;
-  for (const btn of [refs.pieBtn, refs.doughnutBtn, refs.polarAreaBtn]) {
-    if (!btn) continue;
+  for (const btn of refs.distributionBtns?.values() ?? []) {
     btn.setAttribute("title", multiDataset ? "Only available for a single dataset" : "");
     setButtonDisabled(btn, multiDataset, "chart-single-dataset-hint");
   }
 
-  const isDistribution = DISTRIBUTION_TYPES.includes(activeType);
+  const isDistribution = isDistributionType(activeType);
   const isSingleDatasetType = isDistribution || activeType === "heatmap";
 
   if (refs.singleDatasetHint) {
@@ -256,7 +247,7 @@ export function updateDistributionButtons(
     const hideRange =
       !hasActiveProperty ||
       !rangeApplies ||
-      DISTRIBUTION_TYPES.includes(activeType) ||
+      isDistributionType(activeType) ||
       activeType === "heatmap";
     refs.rangeSection.toggle(!hideRange);
   }
@@ -278,8 +269,8 @@ function buildRangeSection(
 
   const isCustomActive = !config.range.preset;
 
-  (["7d", "30d", "90d", "all"] as RangePreset[]).forEach((r) => {
-    const btn = btnGroup.createEl("button", { text: RANGE_LABELS[r], cls: CSS.toggleBtn });
+  ALL_RANGE_PRESETS.forEach((r) => {
+    const btn = btnGroup.createEl("button", { text: RANGE_PRESET_LABELS[r], cls: CSS.toggleBtn });
     if (config.range.preset === r) btn.addClass("active");
     btn.onclick = async () => {
       config.range = { preset: r };
@@ -387,7 +378,7 @@ export function rebuildPropertySelects(
     const colorInput = row.createEl("input", { type: "color", cls: CSS.colorInput });
     colorInput.id = colorId;
     colorInput.setAttribute("aria-label", `Color for dataset ${i + 1}`);
-    colorInput.value = config.colors[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length];
+    colorInput.value = colorAt(config.colors, i);
     const applyColor = async () => {
       config.colors[i] = colorInput.value;
       await callbacks.onRefresh();

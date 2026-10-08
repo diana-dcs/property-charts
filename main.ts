@@ -3,12 +3,11 @@ import { VIEW_TYPE_CHART, ChartView } from "./src/ChartView";
 import { CodeBlockProcessor, CODE_BLOCK_LANGUAGE } from "./src/CodeBlockProcessor";
 import {
   CHART_TYPE_LABELS,
-  ChartType,
   DEFAULT_SETTINGS,
   PluginSettings,
   RANGE_PRESET_LABELS,
-  RangePreset,
   isChartType,
+  isInFolder,
   isRangePreset,
   normalizeFolderPath,
   toDisplayString,
@@ -123,9 +122,7 @@ export default class ChartPlugin extends Plugin {
           leaf.view.scheduleRefresh();
           return;
         }
-        const folder = leaf.view.getFolder();
-        const prefix = folder === "/" ? "" : folder + "/";
-        if (file.path.startsWith(prefix)) leaf.view.scheduleRefresh();
+        if (isInFolder(file.path, leaf.view.getFolder())) leaf.view.scheduleRefresh();
       }
     });
 
@@ -246,6 +243,12 @@ class ChartPluginSettingTab extends PluginSettingTab {
     this.plugin.applySettingsToViews();
   }
 
+  /**
+   * Fallback UI for Obsidian versions without declarative settings. It builds the
+   * controls itself, but every write goes through setControlValue() above, so parsing,
+   * defaults and the view refresh exist in exactly one place — the two paths used to
+   * drift apart.
+   */
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -260,16 +263,12 @@ class ChartPluginSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.defaultFolder);
 
       new FolderSuggest(this.app, text.inputEl, async (folder) => {
-        this.plugin.settings.defaultFolder = folder;
         text.setValue(folder);
-        await this.plugin.saveSettings();
-        this.plugin.applySettingsToViews();
+        await this.setControlValue("defaultFolder", folder);
       });
 
       text.onChange(async (value) => {
-        this.plugin.settings.defaultFolder = normalizeFolderPath(value);
-        await this.plugin.saveSettings();
-        this.plugin.applySettingsToViews();
+        await this.setControlValue("defaultFolder", value);
       });
     });
 
@@ -278,11 +277,10 @@ class ChartPluginSettingTab extends PluginSettingTab {
       .setDesc("Moment.js format used to parse dates from filenames and frontmatter.")
       .addText((text) =>
         text
-          .setPlaceholder("YYYY-MM-DD")
+          .setPlaceholder(DEFAULT_SETTINGS.defaultDateFormat)
           .setValue(this.plugin.settings.defaultDateFormat)
           .onChange(async (value) => {
-            this.plugin.settings.defaultDateFormat = value || "YYYY-MM-DD";
-            await this.plugin.saveSettings();
+            await this.setControlValue("defaultDateFormat", value);
           })
       );
 
@@ -293,8 +291,7 @@ class ChartPluginSettingTab extends PluginSettingTab {
           .addOptions(CHART_TYPE_LABELS)
           .setValue(this.plugin.settings.defaultChartType)
           .onChange(async (value) => {
-            this.plugin.settings.defaultChartType = value as ChartType;
-            await this.plugin.saveSettings();
+            await this.setControlValue("defaultChartType", value);
           })
       );
 
@@ -305,8 +302,7 @@ class ChartPluginSettingTab extends PluginSettingTab {
           .addOptions(RANGE_PRESET_LABELS)
           .setValue(this.plugin.settings.defaultRange)
           .onChange(async (value) => {
-            this.plugin.settings.defaultRange = value as RangePreset;
-            await this.plugin.saveSettings();
+            await this.setControlValue("defaultRange", value);
           })
       );
 
@@ -315,13 +311,11 @@ class ChartPluginSettingTab extends PluginSettingTab {
       .setDesc("Maximum number of files processed per chart. A banner appears when the limit is exceeded. Set to 0 for no limit.")
       .addText((text) =>
         text
-          .setPlaceholder("5000")
+          .setPlaceholder(String(DEFAULT_SETTINGS.fileLimit))
           .setValue(String(this.plugin.settings.fileLimit))
+          // Debounced because every keystroke would otherwise re-render every chart.
           .onChange(debounce(async (value) => {
-            const parsed = parseInt(value, 10);
-            this.plugin.settings.fileLimit = (!isNaN(parsed) && parsed >= 0) ? parsed : 5000;
-            await this.plugin.saveSettings();
-            this.plugin.applySettingsToViews();
+            await this.setControlValue("fileLimit", value);
           }, 500, true))
       );
   }

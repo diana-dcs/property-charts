@@ -4,15 +4,37 @@ import { moment } from "obsidian";
 import {
   ChartConfig,
   ChartType,
-  CHART_COLORS_HEX,
   CSS,
   CSS_VARS,
-  DISTRIBUTION_TYPES,
   Dataset,
+  DistributionType,
+  isDistributionType,
+  colorAt,
+  countValueFrequencies,
   stripWikiLinks,
-  toValueStrings,
 } from "./types";
+import { toRgba, themeColorString } from "./color";
 import { renderHeatmap, renderHeatmapLegend, HEATMAP_WRAPPER_W, computeHeatmapDimensions } from "./HeatmapRenderer";
+
+/**
+ * Which Chart.js type draws each distribution type. Spelling the mapping out keeps the
+ * `as ChartJsType` cast off `config.type`, which would silently accept "heatmap" — a
+ * type Chart.js only knows once the matrix controller is registered.
+ */
+const DISTRIBUTION_CHARTJS_TYPE: Record<DistributionType, ChartJsType> = {
+  pie: "pie",
+  doughnut: "doughnut",
+  polarArea: "polarArea",
+};
+
+/**
+ * Chart.js type for the trend charts. Both the time-series and the frequency variant are
+ * only ever reached for "line" and "bar"; anything else would be a caller bug, so it
+ * falls back to the line chart rather than throwing mid-render.
+ */
+function trendChartJsType(type: ChartType): ChartJsType {
+  return type === "bar" ? "bar" : "line";
+}
 
 export class ChartRenderer {
   private chart: Chart | null = null;
@@ -33,17 +55,19 @@ export class ChartRenderer {
   }
 
   async render(config: ChartConfig, datasets: Dataset[]): Promise<void> {
+    // A heatmap needs numeric or boolean values; the explanatory hint is shown by
+    // ChartView, so there is nothing to draw here.
+    const isTextOnly = datasets.every((d) => d.valueType === "text");
+
     if (config.type === "heatmap") {
-      const isTextOnly = datasets.every((d) => d.valueType === "text");
-      if (isTextOnly) return; // hint shown in sidebar by ChartView
+      if (isTextOnly) return;
       await this.renderHeatmapChart(config, datasets);
       return;
     }
-    if (DISTRIBUTION_TYPES.includes(config.type)) {
-      this.renderDistributionChart(config, datasets);
+    if (isDistributionType(config.type)) {
+      this.renderDistributionChart(config, datasets, config.type);
       return;
     }
-    const isTextOnly = datasets.every((d) => d.valueType === "text");
     if (isTextOnly) {
       this.renderFrequencyChart(config, datasets);
     } else {
@@ -87,7 +111,7 @@ export class ChartRenderer {
     const canvas = chartDiv.createEl("canvas");
 
     // Legend below the chart, still inside the wrapper so it scrolls together.
-    const color = this.resolveColor(config, 0);
+    const color = colorAt(config.colors, 0);
     renderHeatmapLegend(wrapper, color);
 
     const year = config.heatmapYear ?? new Date().getFullYear();
@@ -101,17 +125,13 @@ export class ChartRenderer {
     this.chart = renderHeatmap(canvas, points, color, year, config.range, isBool);
   }
 
-  private resolveColor(config: ChartConfig, i: number): string {
-    return config.colors?.[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length];
-  }
-
   private renderTimeSeriesChart(config: ChartConfig, datasets: Dataset[]): void {
     const labels = this.buildLabels(datasets);
 
     const chartDatasets: ChartDataset[] = datasets.map((dataset, i) => {
-      const hex = this.resolveColor(config, i);
-      const fill = this.hexToRgba(hex, 0.8);
-      const border = this.hexToRgba(hex, 1);
+      const color = colorAt(config.colors, i);
+      const fill = toRgba(color, 0.8);
+      const border = toRgba(color, 1);
 
       const pointMap = new Map(dataset.points.map((p) => [p.label, p]));
       const data = labels.map((label) => {
@@ -136,7 +156,7 @@ export class ChartRenderer {
     });
 
     const cfg: ChartConfiguration = {
-      type: this.mapChartType(config.type),
+      type: trendChartJsType(config.type),
       data: { labels, datasets: chartDatasets },
       options: {
         responsive: true,
@@ -156,37 +176,28 @@ export class ChartRenderer {
   }
 
   private renderFrequencyChart(config: ChartConfig, datasets: Dataset[]): void {
-    const allLabels = new Set<string>();
-    const freqMaps = datasets.map((dataset) => {
-      const freq: Record<string, number> = {};
-      for (const point of dataset.points) {
-        const vals = Array.isArray(point.rawValue)
-          ? (point.rawValue as unknown[]).map(String)
-          : [String(point.rawValue)];
-        for (const val of vals) {
-          freq[val] = (freq[val] ?? 0) + 1;
-          allLabels.add(val);
-        }
-      }
-      return freq;
-    });
+    const freqMaps = datasets.map((dataset) => countValueFrequencies(dataset.points));
 
-    const rawKeys = Array.from(allLabels).sort();
+    const allValues = new Set<string>();
+    for (const freq of freqMaps) {
+      for (const value of freq.keys()) allValues.add(value);
+    }
+    const rawKeys = [...allValues].sort();
     const labels = rawKeys.map(stripWikiLinks);
 
     const chartDatasets: ChartDataset[] = datasets.map((dataset, i) => {
-      const hex = this.resolveColor(config, i);
+      const color = colorAt(config.colors, i);
       return {
         label: dataset.property,
-        data: rawKeys.map((k) => freqMaps[i][k] ?? 0),
-        backgroundColor: this.hexToRgba(hex, 0.8),
-        borderColor: this.hexToRgba(hex, 1),
+        data: rawKeys.map((key) => freqMaps[i].get(key) ?? 0),
+        backgroundColor: toRgba(color, 0.8),
+        borderColor: toRgba(color, 1),
         borderWidth: 2,
       };
     });
 
     const cfg: ChartConfiguration = {
-      type: config.type === "line" ? "line" : "bar",
+      type: trendChartJsType(config.type),
       data: { labels, datasets: chartDatasets },
       options: {
         responsive: true,
@@ -199,30 +210,27 @@ export class ChartRenderer {
     this.chart = new Chart(this.canvas, cfg);
   }
 
-  private renderDistributionChart(config: ChartConfig, datasets: Dataset[]): void {
+  private renderDistributionChart(
+    config: ChartConfig,
+    datasets: Dataset[],
+    type: DistributionType,
+  ): void {
     const dataset = datasets[0];
     if (!dataset) return;
 
-    const freq: Record<string, number> = {};
-    for (const point of dataset.points) {
-      for (const val of toValueStrings(point.rawValue)) {
-        freq[val] = (freq[val] ?? 0) + 1;
-      }
-    }
+    const freq = countValueFrequencies(dataset.points);
 
-    const rawKeys = Object.keys(freq).sort();
+    const rawKeys = [...freq.keys()].sort();
     const labels = rawKeys.map(stripWikiLinks);
-    const data = rawKeys.map((k) => freq[k]);
-    const total = data.reduce((s, v) => s + v, 0);
+    const data = rawKeys.map((key) => freq.get(key) ?? 0);
+    const total = data.reduce((sum, value) => sum + value, 0);
 
-    const isPolarArea = config.type === "polarArea";
+    const isPolarArea = type === "polarArea";
     const bgAlpha = isPolarArea ? 0.6 : 0.85;
 
-    const bgColors = labels.map((_, i) =>
-      this.hexToRgba(config.colors?.[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length], bgAlpha)
-    );
+    const bgColors = labels.map((_, i) => toRgba(colorAt(config.colors, i), bgAlpha));
     const borderColors = labels.map((_, i) =>
-      this.hexToRgba(config.colors?.[i] ?? CHART_COLORS_HEX[i % CHART_COLORS_HEX.length], isPolarArea ? 0.5 : 1)
+      toRgba(colorAt(config.colors, i), isPolarArea ? 0.5 : 1)
     );
 
     const chartDataset: ChartDataset = {
@@ -234,7 +242,7 @@ export class ChartRenderer {
     };
 
     const instancePlugins: Plugin[] = [];
-    if (config.type === "doughnut") {
+    if (type === "doughnut") {
       instancePlugins.push({
         id: "doughnutCenter",
         afterDraw(chart: Chart) {
@@ -244,8 +252,7 @@ export class ChartRenderer {
           const cy = (chartArea.top + chartArea.bottom) / 2;
           ctx.save();
           ctx.font = "bold 1.4em sans-serif";
-          ctx.fillStyle =
-            getComputedStyle(document.body).getPropertyValue("--text-normal") || "#333";
+          ctx.fillStyle = themeColorString("--text-normal", "#333");
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(String(total), cx, cy);
@@ -256,9 +263,7 @@ export class ChartRenderer {
 
     // For polarArea: move legend to bottom (gives the circle more square space),
     // and adapt scale colors for dark-mode compatibility.
-    const mutedColor =
-      getComputedStyle(document.body).getPropertyValue("--text-muted").trim() ||
-      "rgba(160,160,160,0.9)";
+    const mutedColor = themeColorString("--text-muted", "rgba(160,160,160,0.9)");
 
     const polarAreaScales: NonNullable<ChartConfiguration["options"]>["scales"] = isPolarArea
       ? {
@@ -274,7 +279,7 @@ export class ChartRenderer {
       : undefined;
 
     const cfg: ChartConfiguration = {
-      type: config.type as ChartJsType,
+      type: DISTRIBUTION_CHARTJS_TYPE[type],
       data: { labels, datasets: [chartDataset] },
       options: {
         responsive: true,
@@ -302,14 +307,6 @@ export class ChartRenderer {
     this.chart = new Chart(this.canvas, cfg);
   }
 
-  private hexToRgba(hex: string, alpha: number): string {
-    if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) hex = CHART_COLORS_HEX[0];
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-
   private buildLabels(datasets: Dataset[]): string[] {
     const seen = new Set<string>();
     const labels: string[] = [];
@@ -322,10 +319,6 @@ export class ChartRenderer {
       }
     }
     return labels;
-  }
-
-  private mapChartType(type: ChartType): ChartJsType {
-    return type === "bar" ? "bar" : "line";
   }
 
   destroy(): void {

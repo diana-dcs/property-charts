@@ -2,7 +2,18 @@ import { normalizePath } from "obsidian";
 
 export type ChartType = "line" | "bar" | "heatmap" | "pie" | "doughnut" | "polarArea";
 
-export const DISTRIBUTION_TYPES: ChartType[] = ["pie", "doughnut", "polarArea"];
+/** The chart types that draw one dataset as shares of a whole. */
+export type DistributionType = "pie" | "doughnut" | "polarArea";
+
+export const DISTRIBUTION_TYPES: DistributionType[] = ["pie", "doughnut", "polarArea"];
+
+/** Narrows a chart type to a DistributionType, so renderers need no cast. */
+export function isDistributionType(type: ChartType): type is DistributionType {
+  return (DISTRIBUTION_TYPES as ChartType[]).includes(type);
+}
+
+/** Chart types plotted against a numeric axis, as opposed to DISTRIBUTION_TYPES. */
+export const TREND_TYPES: ChartType[] = ["line", "bar"];
 
 export const ALL_CHART_TYPES: ChartType[] = ["line", "bar", "heatmap", "pie", "doughnut", "polarArea"];
 
@@ -54,6 +65,20 @@ export const RANGE_PRESET_LABELS: Record<RangePreset, string> = {
   all: "All",
 };
 
+/**
+ * Length of each preset window in days: the window starts that many days before today
+ * and ends today. `null` for "all", which applies no bounds at all.
+ *
+ * Both the data filter (DataCollector) and the heatmap's cell dimming read this, which
+ * is why it lives here — the two used to disagree by a day.
+ */
+export const RANGE_PRESET_DAYS: Record<RangePreset, number | null> = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+  all: null,
+};
+
 /** Narrows an unvalidated value (e.g. from a code block's YAML) to a ChartType. */
 export function isChartType(value: unknown): value is ChartType {
   return typeof value === "string" && (ALL_CHART_TYPES as string[]).includes(value);
@@ -94,6 +119,60 @@ export const CHART_COLORS_HEX = [
   "#9966FF",
   "#FF9F40",
 ];
+
+/**
+ * The color for the nth dataset or segment: the user's choice if present, otherwise the
+ * default palette, which repeats once there are more series than colors.
+ */
+export function colorAt(colors: string[] | undefined, index: number): string {
+  return colors?.[index] ?? CHART_COLORS_HEX[index % CHART_COLORS_HEX.length];
+}
+
+/**
+ * Whether the collected data holds text rather than numbers — which decides between a
+ * time series and a frequency chart, and locks the heatmap.
+ *
+ * Empty datasets are not text: with no values there is nothing to infer a type from, so
+ * reporting text would wrongly disable controls for a property that simply has no data
+ * in range yet.
+ */
+export function isTextDatasets(datasets: Dataset[]): boolean {
+  return (
+    datasets.some((d) => d.points.length > 0) &&
+    datasets.every((d) => d.valueType === "text")
+  );
+}
+
+/**
+ * Counts how often each value occurs across the given points, expanding list properties
+ * into one count per element.
+ *
+ * A Map rather than an object: the keys are arbitrary frontmatter values, and a note with
+ * `tag: __proto__` would otherwise hit the object prototype instead of its own entry.
+ */
+export function countValueFrequencies(points: DataPoint[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const point of points) {
+    for (const value of toValueStrings(point.rawValue)) {
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/** The full-year bounds a heatmap is drawn against. */
+export function yearRange(year: number): RangeConfig {
+  return { from: `${year}-01-01`, to: `${year}-12-31` };
+}
+
+/**
+ * Whether a file path lies inside a folder. "/" and "" both mean the vault root, which
+ * contains every file.
+ */
+export function isInFolder(filePath: string, folder: string): boolean {
+  if (folder === "/" || folder === "") return true;
+  return filePath.startsWith(folder + "/");
+}
 
 const HEX_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const FUNCTIONAL_COLOR = /^(?:rgb|hsl)a?\([^()]*\)$/i;
@@ -202,6 +281,9 @@ export const CSS = {
   btnSpacer: "chart-plugin-btn-spacer",
   btnDisabled: "chart-plugin-btn-disabled",
   embedNoData: "chart-plugin-embed-no-data",
+  limit: "chart-plugin-limit",
+  limitWarn: "chart-plugin-limit--warn",
+  limitOk: "chart-plugin-limit--ok",
   heatmapContainer: "chart-plugin-canvas-container--heatmap",
   heatmapWrapper: "chart-plugin-heatmap-wrapper",
   heatmapChart: "chart-plugin-heatmap-chart",
