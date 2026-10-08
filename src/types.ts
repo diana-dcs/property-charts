@@ -36,6 +36,19 @@ export interface DataPoint {
   rawValue: unknown;
 }
 
+/**
+ * A point's value as a number, or null when it has none.
+ *
+ * `value` is a union because a text property keeps its string, which only the frequency
+ * chart reads. Numeric charts go through this instead of asserting `as number`, so a
+ * string lands as a gap in the line rather than as NaN on the axis.
+ */
+export function numericValue(point: DataPoint): number | null {
+  if (typeof point.value === "number") return Number.isFinite(point.value) ? point.value : null;
+  if (typeof point.value === "boolean") return point.value ? 1 : 0;
+  return null;
+}
+
 export interface Dataset {
   property: string;
   points: DataPoint[];
@@ -111,7 +124,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   fileLimit: 5000,
 };
 
-export const CHART_COLORS_HEX = [
+/** Typed as non-empty so the first entry is always available as a fallback. */
+export const CHART_COLORS_HEX: readonly [string, ...string[]] = [
   "#6384FF",
   "#FF6384",
   "#4BC0C0",
@@ -124,8 +138,12 @@ export const CHART_COLORS_HEX = [
  * The color for the nth dataset or segment: the user's choice if present, otherwise the
  * default palette, which repeats once there are more series than colors.
  */
-export function colorAt(colors: string[] | undefined, index: number): string {
-  return colors?.[index] ?? CHART_COLORS_HEX[index % CHART_COLORS_HEX.length];
+export function colorAt(colors: readonly string[] | undefined, index: number): string {
+  return (
+    colors?.[index] ??
+    CHART_COLORS_HEX[index % CHART_COLORS_HEX.length] ??
+    CHART_COLORS_HEX[0]
+  );
 }
 
 /**

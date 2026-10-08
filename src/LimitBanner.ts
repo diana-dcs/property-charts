@@ -1,4 +1,5 @@
 import { CSS } from "./types";
+import { handle } from "./eventHandlers";
 
 /**
  * The strip above a chart reporting how the file limit was applied, with a button to
@@ -30,7 +31,5 @@ export function renderLimitBanner(
   const btn = container.createEl("button", {
     text: truncated ? "Load all" : "Apply limit",
   });
-  btn.onclick = () => {
-    void onToggle();
-  };
+  btn.onclick = handle(onToggle);
 }

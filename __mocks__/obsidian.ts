@@ -51,6 +51,10 @@ export function normalizePath(path: string): string {
     .normalize();
 }
 
+export class Notice {
+  constructor(public message: string) {}
+}
+
 export class Plugin {}
 export class ItemView {}
 export class WorkspaceLeaf {}

@@ -31,7 +31,7 @@ const context = await esbuild.context({
     ...builtinModules.map((m) => `node:${m}`),
   ],
   format: "cjs",
-  target: "es2018",
+  target: "es2022",
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   minify: prod,

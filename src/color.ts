@@ -15,23 +15,29 @@ export const FALLBACK_RGB: Rgb = [99, 132, 255];
 /** Neutral gray for theme variables that are unset (e.g. in tests or a sparse theme). */
 export const NEUTRAL_RGB: Rgb = [200, 200, 200];
 
+/** The three capture groups of a color pattern, parsed in the given radix. */
+function groupsToRgb(match: RegExpMatchArray, radix: number, repeat = false): Rgb | null {
+  const [, r, g, b] = match;
+  if (r === undefined || g === undefined || b === undefined) return null;
+
+  // `repeat` expands a shorthand hex digit: "f" → "ff".
+  const channel = (group: string) => parseInt(repeat ? group + group : group, radix);
+
+  const rgb: Rgb = [channel(r), channel(g), channel(b)];
+  return rgb.every((value) => Number.isFinite(value)) ? rgb : null;
+}
+
 export function hexToRgb(hex: string): Rgb | null {
   const short = hex.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
-  if (short) {
-    return [
-      parseInt(short[1] + short[1], 16),
-      parseInt(short[2] + short[2], 16),
-      parseInt(short[3] + short[3], 16),
-    ];
-  }
-  const m = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
-  if (!m) return null;
-  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+  if (short) return groupsToRgb(short, 16, true);
+
+  const full = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  return full ? groupsToRgb(full, 16) : null;
 }
 
 export function parseRgbFunction(css: string): Rgb | null {
-  const rgb = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  return rgb ? [parseInt(rgb[1]), parseInt(rgb[2]), parseInt(rgb[3])] : null;
+  const match = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  return match ? groupsToRgb(match, 10) : null;
 }
 
 /**

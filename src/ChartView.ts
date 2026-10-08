@@ -1,4 +1,5 @@
 import { ItemView, WorkspaceLeaf, debounce } from "obsidian";
+import { handle } from "./eventHandlers";
 import { renderLimitBanner } from "./LimitBanner";
 import { buildCodeblock } from "./codeblockExport";
 import {
@@ -32,6 +33,22 @@ export const VIEW_TYPE_CHART = "property-charts-view";
 
 const DEFAULT_CHART_HEIGHT = "300px";
 
+/** What the collected data allows, which decides which controls stay usable. */
+interface DataShape {
+  /** The property holds text, so it is drawn as a frequency chart and locks the heatmap. */
+  isText: boolean;
+  /** At least one note carries a readable date, without which a heatmap has no axis. */
+  hasDates: boolean;
+  /**
+   * The range filter shaped the result. False for a text property drawn as a frequency
+   * chart: the range controls then stay hidden and `range:` is left out on export.
+   */
+  rangeApplies: boolean;
+}
+
+/** The shape assumed before anything is known, which restricts no control. */
+const PERMISSIVE_SHAPE: DataShape = { isText: false, hasDates: true, rangeApplies: true };
+
 export class ChartView extends ItemView {
   private config: ChartConfig;
   private renderer: ChartRenderer | null = null;
@@ -39,20 +56,17 @@ export class ChartView extends ItemView {
   // Created in onOpen(), before any render path can reach them.
   private chartContainer!: HTMLElement;
   private controlRefs: ControlRefs | null = null;
-  private datasets: string[] = [""];
   private heatmapYear: number = new Date().getFullYear();
   private yearNavContainer: HTMLElement | null = null;
   private segmentColorSection: HTMLElement | null = null;
   private segmentLabels: string[] = [];
   private limitOverride = false;
-  // False while a text property is rendered as a frequency chart: the range filter is
-  // not applied then, so its controls stay hidden and `range:` is left out on export.
-  private rangeApplies = true;
-  // Last known shape of the selected data. Kept on the view so control updates triggered
-  // outside a refresh (e.g. the metadata-cache "resolved" event) don't reset the heatmap
-  // button and its hint to the permissive defaults.
-  private isTextProperty = false;
-  private hasDates = true;
+  /**
+   * Last known shape of the selected data. Kept on the view so control updates triggered
+   * outside a refresh (e.g. the metadata-cache "resolved" event) don't reset the heatmap
+   * button and its hint to the permissive defaults.
+   */
+  private shape: DataShape = PERMISSIVE_SHAPE;
   private limitBanner: HTMLElement | null = null;
   private bannerContainer!: HTMLElement;
   private emptyStateEl!: HTMLElement;
@@ -75,6 +89,11 @@ export class ChartView extends ItemView {
   getIcon(): string { return "bar-chart-2"; }
   getFolder(): string { return this.config.folder; }
 
+  /** Datasets with a property actually selected; the empty rows are placeholders. */
+  private get activePropertyCount(): number {
+    return this.config.properties.filter(Boolean).length;
+  }
+
   async onOpen(): Promise<void> {
     const root = this.contentEl;
     root.addClass(CSS.view);
@@ -82,7 +101,7 @@ export class ChartView extends ItemView {
     // Settings area: scrolls internally when many datasets are added
     const scrollArea = root.createDiv({ cls: CSS.scrollArea });
 
-    this.controlRefs = buildControls(scrollArea, this.config, this.datasets, this.collector, {
+    this.controlRefs = buildControls(scrollArea, this.config, this.collector, {
       onRefresh: () => this.refresh(),
       onRebuildPropertySelects: () => this.rebuildPropertySelects(),
       onReset: () => this.resetConfig(),
@@ -96,7 +115,7 @@ export class ChartView extends ItemView {
     // Button directly below settings, same horizontal inset as sections
     const actionsBar = root.createDiv({ cls: CSS.actions });
     const copyBtn = actionsBar.createEl("button", { text: "Copy as codeblock", cls: CSS.copyBtn });
-    copyBtn.onclick = () => this.copyCodeblock(copyBtn);
+    copyBtn.onclick = handle(() => this.copyCodeblock(copyBtn));
 
     // Year navigator for heatmap (hidden when type is not heatmap)
     this.yearNavContainer = root.createDiv({ cls: CSS.yearNav });
@@ -107,16 +126,16 @@ export class ChartView extends ItemView {
     yearLabel.setText(String(this.heatmapYear));
     const nextYearBtn = this.yearNavContainer.createEl("button", { text: "→", cls: CSS.toggleBtn });
     nextYearBtn.setAttribute("aria-label", "Next year");
-    prevYearBtn.onclick = async () => {
+    prevYearBtn.onclick = handle(async () => {
       this.heatmapYear--;
       yearLabel.setText(String(this.heatmapYear));
       await this.refresh();
-    };
-    nextYearBtn.onclick = async () => {
+    });
+    nextYearBtn.onclick = handle(async () => {
       this.heatmapYear++;
       yearLabel.setText(String(this.heatmapYear));
       await this.refresh();
-    };
+    });
 
     // Slot for empty-state guidance (no folder / no property selected)
     this.emptyStateEl = root.createDiv({ cls: CSS.noDataMsg });
@@ -166,21 +185,20 @@ export class ChartView extends ItemView {
       this.controlRefs.propSection,
       this.config,
       this.collector,
-      this.datasets,
       {
         onRefresh: () => this.refresh(),
         onRebuildPropertySelects: () => this.rebuildPropertySelects(),
         onReset: () => this.resetConfig(),
       }
     );
-    const activeCount = this.config.properties.filter(Boolean).length;
-    updateHeatmapButton(this.controlRefs, activeCount, this.isTextProperty, this.hasDates);
+    const activeCount = this.activePropertyCount;
+    updateHeatmapButton(this.controlRefs, activeCount, this.shape.isText, this.shape.hasDates);
     updateDistributionButtons(
       this.controlRefs,
       activeCount,
       this.config.type,
       activeCount > 0,
-      this.rangeApplies
+      this.shape.rangeApplies
     );
   }
 
@@ -190,13 +208,9 @@ export class ChartView extends ItemView {
     this.config.colors = [CHART_COLORS_HEX[0]];
     this.config.dateFormat = this.settings.defaultDateFormat;
     this.config.range = { preset: this.settings.defaultRange };
-    this.datasets.length = 0;
-    this.datasets.push("");
     this.heatmapYear = new Date().getFullYear();
     this.limitOverride = false;
-    this.rangeApplies = true;
-    this.isTextProperty = false;
-    this.hasDates = true;
+    this.shape = PERMISSIVE_SHAPE;
     this.rebuildPropertySelects();
     void this.refresh();
   }
@@ -205,7 +219,7 @@ export class ChartView extends ItemView {
     const block = buildCodeblock(this.config, {
       heatmapYear: this.heatmapYear,
       segmentLabels: this.segmentLabels,
-      rangeApplies: this.rangeApplies,
+      rangeApplies: this.shape.rangeApplies,
     });
 
     try {
@@ -233,33 +247,16 @@ export class ChartView extends ItemView {
     // Without a property there is no data shape to remember, so drop the state from the
     // previous selection instead of carrying its restrictions over.
     if (!hasActiveProperty || !this.config.folder) {
-      this.isTextProperty = false;
-      this.hasDates = true;
-      this.rangeApplies = true;
+      this.shape = PERMISSIVE_SHAPE;
     }
 
     this.syncEarlyControlState(isHeatmap, hasActiveProperty);
     if (!hasActiveProperty || !this.config.folder) {
-      this.rebuildSegmentColorSection([]);
-      this.renderer?.destroy();
-      this.renderer = null;
-      this.chartContainer.empty();
-      this.chartContainer.hide();
-      this.bannerContainer.empty();
-      this.limitBanner = null;
-      const emptyMsg = !this.config.folder
-        ? "Select a folder to get started."
-        : "Select a property to create a chart.";
-      this.emptyStateEl.setText(emptyMsg);
-      this.emptyStateEl.show();
-      if (this.controlRefs?.dataHint) {
-        this.controlRefs.dataHint.setText(emptyMsg);
-        this.controlRefs.dataHint.show();
-      }
+      this.renderEmptyState();
       return;
     }
 
-    this.controlRefs?.dataHint?.hide();
+    this.controlRefs?.dataHint.hide();
 
     this.emptyStateEl.hide();
     this.chartContainer.show();
@@ -292,17 +289,42 @@ export class ChartView extends ItemView {
     }
   }
 
+  /**
+   * Tears the chart down and explains what is still missing. Reached whenever no folder
+   * or no property is selected, including after a reset.
+   */
+  private renderEmptyState(): void {
+    this.rebuildSegmentColorSection([]);
+    this.renderer?.destroy();
+    this.renderer = null;
+    this.chartContainer.empty();
+    this.chartContainer.hide();
+    this.bannerContainer.empty();
+    this.limitBanner = null;
+
+    const message = !this.config.folder
+      ? "Select a folder to get started."
+      : "Select a property to create a chart.";
+    this.emptyStateEl.setText(message);
+    this.emptyStateEl.show();
+
+    if (this.controlRefs) {
+      this.controlRefs.dataHint.setText(message);
+      this.controlRefs.dataHint.show();
+    }
+  }
+
   private syncEarlyControlState(isHeatmap: boolean, hasActiveProperty: boolean): void {
     this.yearNavContainer?.toggle(isHeatmap);
     if (this.controlRefs) {
-      const activeCount = this.config.properties.filter(Boolean).length;
-      updateHeatmapButton(this.controlRefs, activeCount, this.isTextProperty, this.hasDates);
+      const activeCount = this.activePropertyCount;
+      updateHeatmapButton(this.controlRefs, activeCount, this.shape.isText, this.shape.hasDates);
       updateDistributionButtons(
         this.controlRefs,
         activeCount,
         this.config.type,
         hasActiveProperty,
-        this.rangeApplies
+        this.shape.rangeApplies
       );
     }
   }
@@ -334,7 +356,7 @@ export class ChartView extends ItemView {
       collectConfig,
       this.limitOverride,
     );
-    this.rangeApplies = !isTextFallback;
+    this.shape = { ...this.shape, rangeApplies: !isTextFallback };
     return datasets;
   }
 
@@ -368,8 +390,7 @@ export class ChartView extends ItemView {
 
     // Remembered so control updates outside a refresh keep the heatmap locked for text
     // properties instead of falling back to the permissive parameter defaults.
-    this.isTextProperty = isTextProperty;
-    this.hasDates = hasDates;
+    this.shape = { ...this.shape, isText: isTextProperty, hasDates };
 
     if (isDistribution && datasets[0]) {
       // The segment order must match ChartRenderer's, which sorts the raw values before
@@ -381,15 +402,15 @@ export class ChartView extends ItemView {
     }
 
     if (this.controlRefs) {
-      const activeCount = this.config.properties.filter(Boolean).length;
+      const activeCount = this.activePropertyCount;
       updateHeatmapButton(this.controlRefs, activeCount, isTextProperty, hasDates);
     }
 
-    if (this.controlRefs?.rangeSection && !isHeatmap && !isDistribution) {
-      this.controlRefs.rangeSection.toggle(this.rangeApplies);
+    if (this.controlRefs && !isHeatmap && !isDistribution) {
+      this.controlRefs.rangeSection.toggle(this.shape.rangeApplies);
     }
 
-    if (this.controlRefs?.dataHint) {
+    if (this.controlRefs) {
       const hint = this.controlRefs.dataHint;
       if (isHeatmap && allPropsAreText) {
         hint.setText("Heatmap requires numeric or boolean values. Text values are not supported.");
@@ -482,10 +503,10 @@ colorAt(this.config.colors, i);
 
       // Use onchange only so the chart re-renders after the picker is closed,
       // preventing the picker from closing mid-selection.
-      colorInput.onchange = async () => {
+      colorInput.onchange = handle(async () => {
         this.config.colors[i] = colorInput.value;
         await this.refresh();
-      };
+      });
     });
   }
 }

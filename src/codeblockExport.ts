@@ -23,10 +23,11 @@ export function yamlQuote(value: string): string {
 }
 
 /** Renders a scalar-or-list YAML field, collapsing a single entry to the scalar form. */
-function yamlField(key: string, values: string[], quote: (v: string) => string): string {
-  if (values.length === 0) return "";
-  if (values.length === 1) return `${key}: ${quote(values[0])}`;
-  return `${key}:\n${values.map((v) => `  - ${quote(v)}`).join("\n")}`;
+function yamlField(key: string, values: string[]): string {
+  const [only, ...rest] = values;
+  if (only === undefined) return "";
+  if (rest.length === 0) return `${key}: ${yamlQuote(only)}`;
+  return `${key}:\n${values.map((v) => `  - ${yamlQuote(v)}`).join("\n")}`;
 }
 
 /**
@@ -37,7 +38,7 @@ export function buildCodeblock(config: ChartConfig, ctx: ExportContext): string 
   const activeIndices = config.properties
     .map((property, i) => (property ? i : -1))
     .filter((i) => i >= 0);
-  const activeProperties = activeIndices.map((i) => config.properties[i]);
+  const activeProperties = config.properties.filter(Boolean);
 
   // For distribution types, colors map to segments rather than to datasets.
   const exportColors = isDistributionType(config.type)
@@ -48,8 +49,8 @@ export function buildCodeblock(config: ChartConfig, ctx: ExportContext): string 
     "```" + CODE_BLOCK_LANGUAGE,
     `type: ${config.type}`,
     `folder: ${yamlQuote(config.folder)}`,
-    yamlField("property", activeProperties, yamlQuote),
-    yamlField("colors", exportColors, yamlQuote),
+    yamlField("property", activeProperties),
+    yamlField("colors", exportColors),
     `dateFormat: ${config.dateFormat}`,
     rangeLine(config, ctx),
     config.type === "heatmap" ? `year: ${ctx.heatmapYear}` : "",

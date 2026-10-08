@@ -91,8 +91,9 @@ export function renderHeatmap(
   for (let m = 0; m < 12; m++) {
     const firstOfMonth = moment(`${year}-${String(m+1).padStart(2,"0")}-01`);
     const wIdx = Math.floor(firstOfMonth.diff(startOfGrid, "days") / 7);
-    if (wIdx >= 0 && wIdx < NUM_WEEKS && !monthWeeks.has(wIdx)) {
-      monthWeeks.set(wIdx, MONTH_LABELS[m]);
+    const label = MONTH_LABELS[m];
+    if (label && wIdx >= 0 && wIdx < NUM_WEEKS && !monthWeeks.has(wIdx)) {
+      monthWeeks.set(wIdx, label);
     }
   }
 

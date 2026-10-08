@@ -10,6 +10,7 @@ import {
   DistributionType,
   isDistributionType,
   colorAt,
+  numericValue,
   countValueFrequencies,
   stripWikiLinks,
 } from "./types";
@@ -120,7 +121,7 @@ export class ChartRenderer {
       .filter((p) => p.date !== null)
       .map((p) => ({
         date: moment(p.date).format("YYYY-MM-DD"),
-        value: p.value as number | boolean | null,
+        value: numericValue(p),
       }));
     this.chart = renderHeatmap(canvas, points, color, year, config.range, isBool);
   }
@@ -136,7 +137,7 @@ export class ChartRenderer {
       const pointMap = new Map(dataset.points.map((p) => [p.label, p]));
       const data = labels.map((label) => {
         const point = pointMap.get(label);
-        return point ? (point.value as number) : null;
+        return point ? numericValue(point) : null;
       });
 
       const base: ChartDataset = {
@@ -187,9 +188,10 @@ export class ChartRenderer {
 
     const chartDatasets: ChartDataset[] = datasets.map((dataset, i) => {
       const color = colorAt(config.colors, i);
+      const freq = freqMaps[i];
       return {
         label: dataset.property,
-        data: rawKeys.map((key) => freqMaps[i].get(key) ?? 0),
+        data: rawKeys.map((key) => freq?.get(key) ?? 0),
         backgroundColor: toRgba(color, 0.8),
         borderColor: toRgba(color, 1),
         borderWidth: 2,

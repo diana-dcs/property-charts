@@ -296,16 +296,13 @@ export class CodeBlockProcessor {
     }
 
     // Custom range: "YYYY-MM-DD:YYYY-MM-DD"
-    const parts = rangeStr.split(":");
-    if (parts.length === 2) {
-      const fromDate = new Date(parts[0]);
-      const toDate = new Date(parts[1]);
-      if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+    const [first, second, ...rest] = rangeStr.split(":");
+    if (first !== undefined && second !== undefined && rest.length === 0) {
+      if (isNaN(new Date(first).getTime()) || isNaN(new Date(second).getTime())) {
         throw new Error(`Invalid dates in range "${rangeStr}". Format: YYYY-MM-DD:YYYY-MM-DD`);
       }
-      const from = parts[0] <= parts[1] ? parts[0] : parts[1];
-      const to = parts[0] <= parts[1] ? parts[1] : parts[0];
-      return { from, to };
+      // Accept the bounds in either order.
+      return first <= second ? { from: first, to: second } : { from: second, to: first };
     }
 
     throw new Error(`Invalid range "${rangeStr}". Valid values: 7d · 30d · 90d · all · YYYY-MM-DD:YYYY-MM-DD`);

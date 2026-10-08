@@ -93,9 +93,9 @@ export default class ChartPlugin extends Plugin {
   private async activateView(): Promise<void> {
     const { workspace } = this.app;
 
-    const existing = workspace.getLeavesOfType(VIEW_TYPE_CHART);
-    if (existing.length > 0) {
-      await workspace.revealLeaf(existing[0]);
+    const [existing] = workspace.getLeavesOfType(VIEW_TYPE_CHART);
+    if (existing) {
+      await workspace.revealLeaf(existing);
       return;
     }
 

@@ -12,17 +12,26 @@ import {
   isDistributionType,
 } from "./types";
 import { DataCollector } from "./DataCollector";
+import { handle } from "./eventHandlers";
+
+/**
+ * The control elements the view keeps updating after they are built. Every field is
+ * required: each builder returns its own refs and buildControls merely composes them, so
+ * the compiler can prove they all exist and callers need no presence checks.
+ */
+/** Links the disabled single-dataset buttons to the hint explaining why, for a11y. */
+const SINGLE_DATASET_HINT_ID = "chart-single-dataset-hint";
 
 export interface ControlRefs {
   folderSelect: HTMLSelectElement;
   propSection: HTMLElement;
   dataHint: HTMLElement;
-  addBtn?: HTMLButtonElement;
-  heatmapBtn?: HTMLButtonElement;
-  heatmapHint?: HTMLElement;
-  singleDatasetHint?: HTMLElement;
-  distributionBtns?: Map<ChartType, HTMLButtonElement>;
-  rangeSection?: HTMLElement;
+  addBtn: HTMLButtonElement;
+  heatmapBtn: HTMLButtonElement;
+  heatmapHint: HTMLElement;
+  singleDatasetHint: HTMLElement;
+  distributionBtns: Map<ChartType, HTMLButtonElement>;
+  rangeSection: HTMLElement;
 }
 
 export interface ControlCallbacks {
@@ -34,90 +43,90 @@ export interface ControlCallbacks {
 export function buildControls(
   root: HTMLElement,
   config: ChartConfig,
-  datasets: string[],
   collector: DataCollector,
   callbacks: ControlCallbacks
 ): ControlRefs {
   const controls = root.createDiv({ cls: CSS.controls });
-  const refs = {} as ControlRefs;
 
-  buildDataSection(controls, config, datasets, collector, refs, callbacks);
-  buildVisualizationSection(controls, config, callbacks, refs);
-  refs.rangeSection = buildRangeSection(controls, config, callbacks);
-
-  return refs;
+  return {
+    ...buildDataSection(controls, config, collector, callbacks),
+    ...buildVisualizationSection(controls, config, callbacks),
+    rangeSection: buildRangeSection(controls, config, callbacks),
+  };
 }
+
+type DataSectionRefs = Pick<
+  ControlRefs,
+  "folderSelect" | "propSection" | "dataHint" | "addBtn"
+>;
 
 function buildDataSection(
   controls: HTMLElement,
   config: ChartConfig,
-  datasets: string[],
   collector: DataCollector,
-  refs: ControlRefs,
   callbacks: ControlCallbacks
-): void {
+): DataSectionRefs {
   const section = controls.createDiv({ cls: CSS.section });
   const titleRow = section.createDiv({ cls: CSS.sectionTitleRow });
   titleRow.createDiv({ cls: CSS.sectionTitle, text: "Data" });
   const resetBtn = titleRow.createEl("button", { cls: CSS.resetBtn, text: "Reset" });
   resetBtn.onclick = () => callbacks.onReset();
 
-  refs.dataHint = section.createEl("p", { cls: CSS.dataHint });
-  refs.dataHint.hide();
+  const dataHint = section.createEl("p", { cls: CSS.dataHint });
+  dataHint.hide();
 
   const folderRow = section.createDiv({ cls: CSS.row });
   folderRow.createEl("label", { text: "Folder" });
-  refs.folderSelect = folderRow.createEl("select", { cls: "dropdown" });
-  populateFolderSelect(refs.folderSelect, config, collector);
-  refs.folderSelect.onchange = async () => {
+  const folderSelect = folderRow.createEl("select", { cls: "dropdown" });
+  populateFolderSelect(folderSelect, config, collector);
+  folderSelect.onchange = handle(async () => {
     const hadProperties = config.properties.some(Boolean);
-    config.folder = refs.folderSelect.value;
-    datasets.length = 0;
-    datasets.push("");
+    config.folder = folderSelect.value;
     config.properties.length = 0;
     config.properties.push("");
     config.colors.length = 0;
     config.colors.push(CHART_COLORS_HEX[0]);
     callbacks.onRebuildPropertySelects();
     await callbacks.onRefresh();
-    if (hadProperties && refs.dataHint) {
-      refs.dataHint.setText("Folder changed — please select a property.");
-      refs.dataHint.show();
+    if (hadProperties) {
+      dataHint.setText("Folder changed — please select a property.");
+      dataHint.show();
     }
-  };
+  });
 
-  refs.propSection = section.createDiv({ cls: CSS.propSection });
+  const propSection = section.createDiv({ cls: CSS.propSection });
 
-  refs.addBtn = section.createEl("button", { text: "Add dataset", cls: CSS.addBtn });
-  const addBtn = refs.addBtn;
+  const addBtn = section.createEl("button", { text: "Add dataset", cls: CSS.addBtn });
   addBtn.onclick = () => {
     if (addBtn.getAttribute("aria-disabled") === "true") return;
-    datasets.push("");
     config.properties.push("");
-    config.colors.push(CHART_COLORS_HEX[config.colors.length % CHART_COLORS_HEX.length]);
+    config.colors.push(colorAt(config.colors, config.colors.length));
     callbacks.onRebuildPropertySelects();
   };
 
+  return { folderSelect, propSection, dataHint, addBtn };
 }
+
+type VisualizationSectionRefs = Pick<
+  ControlRefs,
+  "heatmapBtn" | "heatmapHint" | "singleDatasetHint" | "distributionBtns"
+>;
 
 function buildVisualizationSection(
   controls: HTMLElement,
   config: ChartConfig,
-  callbacks: ControlCallbacks,
-  refs: ControlRefs
-): void {
+  callbacks: ControlCallbacks
+): VisualizationSectionRefs {
   const section = createSection(controls, "Visualization");
 
   // Single hint for all chart types that only support one dataset
   const singleDatasetHint = section.createDiv({ cls: CSS.hint });
-  singleDatasetHint.id = "chart-single-dataset-hint";
+  singleDatasetHint.id = SINGLE_DATASET_HINT_ID;
   singleDatasetHint.setText("Heatmap, pie, doughnut and polar area charts can only display one dataset at a time.");
   singleDatasetHint.hide();
-  refs.singleDatasetHint = singleDatasetHint;
 
   const heatmapHint = section.createDiv({ cls: CSS.hint });
   heatmapHint.hide();
-  refs.heatmapHint = heatmapHint;
 
   // All type buttons share one "clear active" operation via this array.
   const allTypeBtns: HTMLButtonElement[] = [];
@@ -131,25 +140,24 @@ function buildVisualizationSection(
   TREND_TYPES.forEach((t) => {
     const btn = trendGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
     if (t === config.type) btn.addClass("active");
-    btn.onclick = async () => {
+    btn.onclick = handle(async () => {
       config.type = t;
       clearActive();
       btn.addClass("active");
       await callbacks.onRefresh();
-    };
+    });
     allTypeBtns.push(btn);
   });
 
   const heatmapBtn = trendGroup.createEl("button", { text: CHART_TYPE_LABELS["heatmap"], cls: CSS.toggleBtn });
   if (config.type === "heatmap") heatmapBtn.addClass("active");
-  heatmapBtn.onclick = async () => {
+  heatmapBtn.onclick = handle(async () => {
     if (heatmapBtn.getAttribute("aria-disabled") === "true") return;
     config.type = "heatmap";
     clearActive();
     heatmapBtn.addClass("active");
     await callbacks.onRefresh();
-  };
-  refs.heatmapBtn = heatmapBtn;
+  });
   allTypeBtns.push(heatmapBtn);
 
   // Row 2: Distribution / text-property types
@@ -157,20 +165,22 @@ function buildVisualizationSection(
   distRow.createEl("label", { text: "Distribution" });
   const distGroup = distRow.createDiv({ cls: CSS.btnGroup });
 
-  refs.distributionBtns = new Map();
+  const distributionBtns = new Map<ChartType, HTMLButtonElement>();
   DISTRIBUTION_TYPES.forEach((t) => {
     const btn = distGroup.createEl("button", { text: CHART_TYPE_LABELS[t], cls: CSS.toggleBtn });
     if (t === config.type) btn.addClass("active");
-    btn.onclick = async () => {
+    btn.onclick = handle(async () => {
       if (btn.getAttribute("aria-disabled") === "true") return;
       config.type = t;
       clearActive();
       btn.addClass("active");
       await callbacks.onRefresh();
-    };
+    });
     allTypeBtns.push(btn);
-    refs.distributionBtns?.set(t, btn);
+    distributionBtns.set(t, btn);
   });
+
+  return { heatmapBtn, heatmapHint, singleDatasetHint, distributionBtns };
 }
 
 function setButtonDisabled(btn: HTMLButtonElement, disabled: boolean, hintId?: string): void {
@@ -193,8 +203,6 @@ export function updateHeatmapButton(
   textPropertySelected = false,
   hasDates = true
 ): void {
-  const btn = refs.heatmapBtn;
-  if (!btn) return;
   const disabledMulti = activeDatasetCount > 1;
   const disabled = disabledMulti || textPropertySelected || !hasDates;
 
@@ -202,15 +210,14 @@ export function updateHeatmapButton(
   if (disabledMulti) title = "Only available for a single dataset";
   else if (textPropertySelected) title = "Heatmap requires numeric or boolean values";
   else if (!hasDates) title = "Heatmap requires notes with dates in their filename or frontmatter";
-  btn.setAttribute("title", title);
-  setButtonDisabled(btn, disabled, "chart-single-dataset-hint");
+  refs.heatmapBtn.setAttribute("title", title);
+  setButtonDisabled(refs.heatmapBtn, disabled, SINGLE_DATASET_HINT_ID);
 
-  if (refs.heatmapHint) {
-    const showHint = !disabledMulti && (textPropertySelected || !hasDates);
-    refs.heatmapHint.toggle(showHint);
-    if (showHint) refs.heatmapHint.setText(title);
-  }
-
+  // The multi-dataset case already has its own hint, so only the data-shape reasons are
+  // spelled out here.
+  const showHint = !disabledMulti && (textPropertySelected || !hasDates);
+  refs.heatmapHint.toggle(showHint);
+  if (showHint) refs.heatmapHint.setText(title);
 }
 
 export function updateDistributionButtons(
@@ -222,35 +229,27 @@ export function updateDistributionButtons(
   rangeApplies = true
 ): void {
   const multiDataset = activeDatasetCount > 1;
-  for (const btn of refs.distributionBtns?.values() ?? []) {
+  for (const btn of refs.distributionBtns.values()) {
     btn.setAttribute("title", multiDataset ? "Only available for a single dataset" : "");
-    setButtonDisabled(btn, multiDataset, "chart-single-dataset-hint");
+    setButtonDisabled(btn, multiDataset, SINGLE_DATASET_HINT_ID);
   }
 
-  const isDistribution = isDistributionType(activeType);
-  const isSingleDatasetType = isDistribution || activeType === "heatmap";
+  const isSingleDatasetType = isDistributionType(activeType) || activeType === "heatmap";
 
-  if (refs.singleDatasetHint) {
-    refs.singleDatasetHint.toggle(multiDataset);
-  }
+  refs.singleDatasetHint.toggle(multiDataset);
 
-  if (refs.addBtn) {
-    const disableAdd = isSingleDatasetType;
-    const title = isSingleDatasetType
+  refs.addBtn.setAttribute(
+    "title",
+    isSingleDatasetType
       ? "Heatmap, pie, doughnut and polar area charts only support a single dataset"
-      : "";
-    refs.addBtn.setAttribute("title", title);
-    setButtonDisabled(refs.addBtn, disableAdd, "chart-single-dataset-hint");
-  }
+      : ""
+  );
+  setButtonDisabled(refs.addBtn, isSingleDatasetType, SINGLE_DATASET_HINT_ID);
 
-  if (refs.rangeSection) {
-    const hideRange =
-      !hasActiveProperty ||
-      !rangeApplies ||
-      isDistributionType(activeType) ||
-      activeType === "heatmap";
-    refs.rangeSection.toggle(!hideRange);
-  }
+  // The range never shapes these charts, so showing its controls would imply otherwise.
+  const rangeMatters =
+    hasActiveProperty && rangeApplies && !isSingleDatasetType;
+  refs.rangeSection.toggle(rangeMatters);
 }
 
 function buildRangeSection(
@@ -272,7 +271,7 @@ function buildRangeSection(
   ALL_RANGE_PRESETS.forEach((r) => {
     const btn = btnGroup.createEl("button", { text: RANGE_PRESET_LABELS[r], cls: CSS.toggleBtn });
     if (config.range.preset === r) btn.addClass("active");
-    btn.onclick = async () => {
+    btn.onclick = handle(async () => {
       config.range = { preset: r };
       btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
       btn.addClass("active");
@@ -280,7 +279,7 @@ function buildRangeSection(
       setCustomRowsVisible(false);
       dateError.hide();
       await callbacks.onRefresh();
-    };
+    });
   });
 
   const customBtn = btnGroup.createEl("button", { text: "Custom", cls: CSS.toggleBtn });
@@ -313,7 +312,7 @@ function buildRangeSection(
   // Show custom fields only when no preset is active (custom range is already set)
   setCustomRowsVisible(isCustomActive);
 
-  applyBtn.onclick = async () => {
+  applyBtn.onclick = handle(async () => {
     fromInput.removeClass("is-invalid");
     toInput.removeClass("is-invalid");
     const missingFrom = !fromInput.value;
@@ -335,7 +334,7 @@ function buildRangeSection(
     btnGroup.querySelectorAll("button").forEach((b) => b.removeClass("active"));
     customBtn.addClass("active");
     await callbacks.onRefresh();
-  };
+  });
 
   return section;
 }
@@ -363,14 +362,13 @@ export function rebuildPropertySelects(
   propSection: HTMLElement,
   config: ChartConfig,
   collector: DataCollector,
-  datasets: string[],
   callbacks: ControlCallbacks
 ): void {
   propSection.empty();
 
   const available = config.folder ? collector.getPropertiesInFolder(config.folder) : [];
 
-  datasets.forEach((_, i) => {
+  config.properties.forEach((_, i) => {
     const row = propSection.createDiv({ cls: CSS.row });
     row.createEl("label", { text: `Dataset ${i + 1}` });
 
@@ -379,10 +377,12 @@ export function rebuildPropertySelects(
     colorInput.id = colorId;
     colorInput.setAttribute("aria-label", `Color for dataset ${i + 1}`);
     colorInput.value = colorAt(config.colors, i);
-    const applyColor = async () => {
+    // Both events: oninput gives live feedback while dragging, onchange catches the
+    // keyboard and paste paths that never fire oninput.
+    const applyColor = handle(async () => {
       config.colors[i] = colorInput.value;
       await callbacks.onRefresh();
-    };
+    });
     colorInput.oninput = applyColor;
     colorInput.onchange = applyColor;
 
@@ -392,21 +392,20 @@ export function rebuildPropertySelects(
       const opt = propSelect.createEl("option", { text: prop, value: prop });
       if (prop === config.properties[i]) opt.selected = true;
     }
-    propSelect.onchange = async () => {
+    propSelect.onchange = handle(async () => {
       config.properties[i] = propSelect.value;
       await callbacks.onRefresh();
-    };
+    });
 
     if (i > 0) {
       const removeBtn = row.createEl("button", { text: "×", cls: CSS.removeBtn });
       removeBtn.setAttribute("aria-label", `Remove dataset ${i + 1}`);
-      removeBtn.onclick = async () => {
-        datasets.splice(i, 1);
+      removeBtn.onclick = handle(async () => {
         config.properties.splice(i, 1);
         config.colors.splice(i, 1);
         callbacks.onRebuildPropertySelects();
         await callbacks.onRefresh();
-      };
+      });
     } else {
       row.createSpan({ cls: CSS.btnSpacer });
     }
