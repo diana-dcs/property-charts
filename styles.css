@@ -3,6 +3,26 @@
    ============================================================ */
 
 /*
+  Design tokens, scoped to the plugin's own roots rather than :root so the names
+  cannot collide with a theme's or another plugin's variables.
+
+  Type sizes use Obsidian's own --font-ui-* variables instead of fixed pixels, so
+  they follow the user's interface font-size setting. Pixel values survive only
+  where a measurement has to line up with canvas geometry; each is noted below.
+*/
+.chart-plugin-view,
+.chart-plugin-embed {
+  --cp-radius: 4px;
+  --cp-gap: 6px;
+  --cp-transition: 120ms;
+  /* Disabled controls stay keyboard-reachable, so they must stay readable too. */
+  --cp-disabled-opacity: 0.6;
+  --cp-font-xs: var(--font-ui-smaller, 0.75rem);
+  --cp-font-sm: var(--font-ui-small, 0.8125rem);
+  --cp-font-md: var(--font-ui-medium, 0.875rem);
+}
+
+/*
   Obsidian's .view-content already has a constrained height (flex:1 in the
   leaf layout). We only need to: stop it from scrolling, reset its padding,
   and let our inner flex column take over.
@@ -44,11 +64,12 @@
 }
 
 .chart-plugin-section-title {
-  font-size: 10px;
+  font-size: var(--cp-font-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  /* --text-faint at this size falls below the 4.5:1 contrast minimum. */
+  color: var(--text-muted);
   margin-bottom: 6px;
 }
 
@@ -69,7 +90,7 @@
 }
 
 .chart-plugin-row label {
-  font-size: 11px;
+  font-size: var(--cp-font-xs);
   color: var(--text-muted);
   min-width: 56px;
   flex-shrink: 0;
@@ -77,8 +98,29 @@
 
 .chart-plugin-row .dropdown {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--cp-font-sm);
   min-width: 0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+
+/*
+  The outlined look every plugin button shares. The rules further down add only
+  what differs: shape, padding and hover color.
+*/
+.chart-plugin-toggle-btn,
+.chart-plugin-add-btn,
+.chart-plugin-remove-btn,
+.chart-plugin-limit button {
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--cp-radius);
+  color: var(--text-muted);
+  font-size: var(--cp-font-xs);
+  white-space: nowrap;
+  transition: border-color var(--cp-transition), color var(--cp-transition),
+    background-color var(--cp-transition);
 }
 
 /* ── Toggle button group (chart type, range presets) ─────── */
@@ -91,14 +133,6 @@
 
 .chart-plugin-toggle-btn {
   padding: 2px 9px;
-  font-size: 11px;
-  border-radius: 4px;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid var(--background-modifier-border);
-  color: var(--text-muted);
-  transition: all 0.12s;
-  white-space: nowrap;
 }
 
 .chart-plugin-toggle-btn:hover {
@@ -115,9 +149,9 @@
 /* Date inputs */
 .chart-plugin-date-input {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--cp-font-xs);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--cp-radius);
   border: 1px solid var(--background-modifier-border);
   background: var(--background-primary);
   color: var(--text-normal);
@@ -129,7 +163,7 @@
 .chart-plugin-no-data-msg,
 .chart-plugin-date-error {
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: var(--cp-font-xs);
   color: var(--text-muted);
   font-style: italic;
   line-height: 1.4;
@@ -141,7 +175,7 @@
   align-items: center;
   justify-content: center;
   padding: 1.5em 1em;
-  font-size: 12px;
+  font-size: var(--cp-font-sm);
   font-style: normal;
   font-weight: normal;
   color: var(--text-muted);
@@ -165,13 +199,8 @@
   width: 100%;
   margin-top: 4px;
   padding: 3px 0;
-  font-size: 11px;
-  border-radius: 4px;
-  cursor: pointer;
-  background: transparent;
-  border: 1px dashed var(--background-modifier-border);
-  color: var(--text-muted);
-  transition: all 0.12s;
+  /* Dashed to read as "add another", not as a primary action. */
+  border-style: dashed;
 }
 
 .chart-plugin-add-btn:hover {
@@ -180,20 +209,19 @@
   border-style: solid;
 }
 
-/* Remove dataset button */
+/*
+  Remove dataset button. Fixed 22px so it stays a circle and keeps the same
+  footprint as .chart-plugin-btn-spacer, which stands in for it on the first row.
+*/
 .chart-plugin-remove-btn {
   width: 22px;
   height: 22px;
   padding: 0;
+  /* Large enough for the × glyph to read at this diameter. */
   font-size: 16px;
   line-height: 1;
   border-radius: 50%;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid var(--background-modifier-border);
-  color: var(--text-muted);
   flex-shrink: 0;
-  transition: all 0.12s;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -215,13 +243,13 @@
 .chart-plugin-copy-btn {
   width: 100%;
   padding: 5px 0;
-  font-size: 12px;
-  border-radius: 4px;
+  font-size: var(--cp-font-sm);
+  border-radius: var(--cp-radius);
   cursor: pointer;
   background: var(--interactive-accent);
   color: var(--text-on-accent);
   border: none;
-  transition: background 0.12s;
+  transition: background-color var(--cp-transition);
 }
 
 .chart-plugin-copy-btn:hover {
@@ -234,21 +262,22 @@
 
 .chart-plugin-section-title-row .chart-plugin-reset-btn {
   padding: 0;
-  font-size: 10px;
+  font-size: var(--cp-font-xs);
   font-weight: 500;
   letter-spacing: 0.03em;
   background: none;
   box-shadow: none;
   border: none;
-  color: var(--text-faint);
+  /* Underlined, so it reads as an action even at --text-muted's lower weight. */
+  color: var(--text-muted);
   cursor: pointer;
   line-height: 1;
   text-decoration: underline;
-  transition: color 0.12s;
+  transition: color var(--cp-transition);
 }
 
 .chart-plugin-section-title-row .chart-plugin-reset-btn:hover {
-  color: var(--text-muted);
+  color: var(--text-normal);
 }
 
 /* ── Date input validation ───────────────────────────────── */
@@ -260,8 +289,13 @@
 
 /* ── Disabled buttons (kept focusable, see setButtonDisabled) ── */
 
+/*
+  These stay in the tab order on purpose, so that a screen-reader user can reach
+  them and hear why they are unavailable. That makes their contrast a real
+  requirement rather than a cosmetic one: 0.45 opacity was too faint to read.
+*/
 .chart-plugin-view button.chart-plugin-btn-disabled {
-  opacity: 0.45;
+  opacity: var(--cp-disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -282,7 +316,7 @@
 .chart-plugin-canvas-container.is-loading {
   opacity: 0.45;
   cursor: wait;
-  transition: opacity 0.15s;
+  transition: opacity var(--cp-transition);
 }
 
 /* ============================================================
@@ -343,7 +377,7 @@
 }
 
 .chart-plugin-heatmap-legend-label {
-  font-size: 11px;
+  font-size: var(--cp-font-xs);
   color: var(--text-muted);
 }
 
@@ -368,8 +402,8 @@
   padding: 4px 10px;
   margin: 0 12px;
   border: 1px solid var(--cp-limit-color);
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--cp-radius);
+  font-size: var(--cp-font-xs);
   color: var(--cp-limit-color);
   opacity: 0.7;
   white-space: nowrap;
@@ -397,14 +431,8 @@
 
 .chart-plugin-limit button {
   padding: 1px 6px;
-  font-size: 11px;
-  border-radius: 4px;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid var(--cp-limit-color);
+  border-color: var(--cp-limit-color);
   color: var(--cp-limit-color);
-  transition: all 0.12s;
-  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -433,6 +461,7 @@
 
 /* ── Invisible spacer replacing the remove button ───────── */
 
+/* Width matches .chart-plugin-remove-btn so both rows align. */
 .chart-plugin-btn-spacer {
   display: inline-block;
   visibility: hidden;
@@ -444,8 +473,35 @@
 
 .chart-plugin-error {
   color: var(--text-error);
-  font-size: 13px;
+  font-size: var(--cp-font-md);
   padding: 8px 12px;
   border-left: 3px solid var(--text-error);
-  border-radius: 4px;
+  border-radius: var(--cp-radius);
+}
+
+/* ── Focus visibility ───────────────────────────────────── */
+
+/*
+  Required, not optional: setButtonDisabled() keeps unavailable buttons in the tab
+  order (aria-disabled plus tabindex="0") so their explanation stays reachable, and
+  without a ring a keyboard user cannot tell where they are.
+*/
+.chart-plugin-view button:focus-visible,
+.chart-plugin-view select:focus-visible,
+.chart-plugin-view input:focus-visible,
+.chart-plugin-embed button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  /* Nothing may clip the ring, least of all the scrolling settings panel. */
+  border-radius: var(--cp-radius);
+}
+
+/* ── Reduced motion ─────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-plugin-view *,
+  .chart-plugin-embed * {
+    transition: none;
+    animation: none;
+  }
 }

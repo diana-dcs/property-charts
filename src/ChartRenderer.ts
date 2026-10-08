@@ -37,6 +37,18 @@ function trendChartJsType(type: ChartType): ChartJsType {
   return type === "bar" ? "bar" : "line";
 }
 
+/**
+ * Chart.js draws onto a canvas, so the stylesheet's prefers-reduced-motion rule cannot
+ * reach its animations — the option has to be set here.
+ */
+function animationOption(): false | undefined {
+  const reduced =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reduced ? false : undefined;
+}
+
 export class ChartRenderer {
   private chart: Chart | null = null;
   private canvas: HTMLCanvasElement;
@@ -162,6 +174,7 @@ export class ChartRenderer {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: animationOption(),
         plugins: {
           legend: { display: datasets.length > 1 },
           tooltip: { mode: "index", intersect: false },
@@ -204,6 +217,7 @@ export class ChartRenderer {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: animationOption(),
         plugins: { legend: { display: datasets.length > 1 } },
         scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
       },
@@ -286,6 +300,7 @@ export class ChartRenderer {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: animationOption(),
         layout: isPolarArea ? { padding: 8 } : undefined,
         plugins: {
           legend: { display: true, position: isPolarArea ? "bottom" : "right" },
