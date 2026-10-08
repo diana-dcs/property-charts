@@ -127,7 +127,6 @@ All data stays in your vault. The plugin reads frontmatter from your local files
 
 - [Chart.js](https://www.chartjs.org/) (MIT) — chart rendering
 - [chartjs-chart-matrix](https://github.com/kurkle/chartjs-chart-matrix) (MIT) — heatmap chart type
-- [js-yaml](https://github.com/nodeca/js-yaml) (MIT) — codeblock YAML parsing
 
 ---  
 
