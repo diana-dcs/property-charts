@@ -1,7 +1,7 @@
 {
   "id": "property-charts",
   "name": "Property Charts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.7.2",
   "description": "Visualize properties from your notes as interactive line, bar, heatmap and pie charts.",
   "author": "Diana",
