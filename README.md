@@ -118,6 +118,8 @@ If Property Charts is useful to you, feedback is very welcome — bug reports, f
 ## Data & privacy
 
 All data stays in your vault. The plugin reads frontmatter from your local files and renders charts entirely offline. No network requests are made.
+
+**Clipboard:** the **Copy as codeblock** button writes the chart configuration to your clipboard. The plugin never reads the clipboard, so nothing you copied elsewhere is accessed.
   
 ---  
 
