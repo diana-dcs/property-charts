@@ -214,7 +214,7 @@ const NAMED_COLORS = new Set([
  * are otherwise ignored silently and the series renders transparent.
  *
  * Inside Obsidian the browser engine makes the final call, so uncommon-but-valid CSS
- * colors are accepted too. Note `CSS` here must be read off globalThis — this module
+ * colors are accepted too. Note `CSS` here must be read off `window` — this module
  * exports its own `CSS` constant, which shadows the global.
  */
 export function isValidColor(value: string): boolean {
@@ -223,7 +223,8 @@ export function isValidColor(value: string): boolean {
   if (HEX_COLOR.test(v) || FUNCTIONAL_COLOR.test(v) || NAMED_COLORS.has(v.toLowerCase())) {
     return true;
   }
-  const cssApi = (globalThis as { CSS?: { supports?: (p: string, v: string) => boolean } }).CSS;
+  if (typeof window === "undefined") return false;
+  const cssApi = (window as { CSS?: { supports?: (p: string, v: string) => boolean } }).CSS;
   return typeof cssApi?.supports === "function" ? cssApi.supports("color", v) : false;
 }
 

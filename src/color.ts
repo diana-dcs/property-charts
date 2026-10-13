@@ -46,13 +46,13 @@ export function parseRgbFunction(css: string): Rgb | null {
  * they cannot parse would silently render as the fallback.
  */
 function cssColorToRgb(value: string): Rgb | null {
-  // `typeof document` rather than `document?.`: the latter still throws a ReferenceError
-  // when the identifier is not declared at all, as outside a browser.
-  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+  // `typeof createEl` rather than `createEl?.`: the latter still throws a ReferenceError
+  // when the identifier is not declared at all, as outside Obsidian.
+  if (typeof createEl !== "function") {
     return null;
   }
   try {
-    const ctx = document.createElement("canvas").getContext("2d");
+    const ctx = createEl("canvas").getContext("2d");
     if (!ctx) return null;
     // An unparseable value leaves fillStyle untouched, so an unlikely sentinel
     // doubles as the failure signal — and never collides with a real request.
