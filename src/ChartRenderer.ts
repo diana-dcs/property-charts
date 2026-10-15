@@ -1,5 +1,5 @@
 import { Chart, ChartConfiguration, ChartDataset, ChartType as ChartJsType, Plugin } from "chart.js/auto";
-import { moment } from "obsidian";
+import { moment } from "./moment";
 
 import {
   ChartConfig,

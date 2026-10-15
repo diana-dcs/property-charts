@@ -1,4 +1,5 @@
-import { App, TFile, TFolder, moment } from "obsidian";
+import { App, TFile, TFolder } from "obsidian";
+import { moment } from "./moment";
 import {
   ChartConfig,
   DataPoint,

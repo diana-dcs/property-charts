@@ -1,7 +1,7 @@
 import { Chart, ChartConfiguration, ScriptableContext } from "chart.js/auto";
 import { MatrixController, MatrixElement } from "chartjs-chart-matrix";
 import type { MatrixDataPoint } from "chartjs-chart-matrix";
-import { moment } from "obsidian";
+import { moment } from "./moment";
 import { CSS, CSS_VARS, RANGE_PRESET_DAYS, RangeConfig } from "./types";
 import { FALLBACK_RGB, lerpRgba, resolveRgb, rgba, themeRgb } from "./color";
 
