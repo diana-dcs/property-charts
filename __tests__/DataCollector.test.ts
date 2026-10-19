@@ -705,3 +705,133 @@ describe("collectForSeries", () => {
     expect(datasets[0].points).toHaveLength(0);
   });
 });
+
+// ============================================================
+// Checkbox properties: closed Checked/Unchecked set over the folder
+// ============================================================
+
+describe("Checkbox properties", () => {
+  // Five notes: two ticked, one explicitly false, one with other properties only, one
+  // with no frontmatter at all. The regression this guards: the last three used to leave
+  // the dataset entirely, so an all-true folder showed a single 100% "true" segment.
+  const files = [
+    makeFile("Tasks/a.md"),
+    makeFile("Tasks/b.md"),
+    makeFile("Tasks/c.md"),
+    makeFile("Tasks/d.md"),
+    makeFile("Tasks/e.md"),
+  ];
+  const tasksRoot = makeFolder("/", [makeFolder("Tasks", files)]);
+  const fm: Record<string, Record<string, unknown>> = {
+    "Tasks/a.md": { done: true },
+    "Tasks/b.md": { done: true },
+    "Tasks/c.md": { done: false },
+    "Tasks/d.md": { other: 1 },
+    // Tasks/e.md: no frontmatter
+  };
+  const config: ChartConfig = {
+    ...baseConfig,
+    folder: "Tasks",
+    properties: ["done"],
+    type: "pie",
+  };
+
+  function makeCollector(
+    frontmatterMap: Record<string, Record<string, unknown>> = fm,
+    settings = DEFAULT_SETTINGS,
+  ) {
+    return new DataCollector(makeApp(tasksRoot, frontmatterMap), settings);
+  }
+
+  test("every note in the folder contributes a point", async () => {
+    const datasets = await makeCollector().collectDatasets(config);
+    expect(datasets[0].valueType).toBe("boolean");
+    expect(datasets[0].points).toHaveLength(5);
+
+    const values = datasets[0].points.map((p) => p.value);
+    expect(values.filter((v) => v === 1)).toHaveLength(2);
+    expect(values.filter((v) => v === 0)).toHaveLength(3);
+  });
+
+  test("notes without the property are reported as false, not as missing", async () => {
+    const datasets = await makeCollector().collectDatasets(config);
+    const byLabel = new Map(datasets[0].points.map((p) => [p.label, p.rawValue]));
+    expect(byLabel.get("a")).toBe(true);
+    expect(byLabel.get("c")).toBe(false);
+    expect(byLabel.get("d")).toBe(false);
+    expect(byLabel.get("e")).toBe(false);
+  });
+
+  test("an all-true folder still counts the untouched notes as false", async () => {
+    const datasets = await makeCollector({
+      "Tasks/a.md": { done: true },
+      "Tasks/b.md": { done: true },
+    }).collectDatasets(config);
+    const values = datasets[0].points.map((p) => p.value);
+    expect(values.filter((v) => v === 1)).toHaveLength(2);
+    expect(values.filter((v) => v === 0)).toHaveLength(3);
+  });
+
+  test("an active range does not change the counts", async () => {
+    const datasets = await makeCollector().collectDatasets({
+      ...config,
+      range: { preset: "7d" },
+    });
+    expect(datasets[0].points).toHaveLength(5);
+  });
+
+  test("collectForSeries reports that the range does not apply", async () => {
+    const { datasets, isTextFallback } = await makeCollector().collectForSeries({
+      ...config,
+      type: "bar",
+      range: { preset: "7d" },
+    });
+    expect(isTextFallback).toBe(true);
+    expect(datasets[0].points).toHaveLength(5);
+  });
+
+  test("checkboxFill: false keeps the sparse reading the heatmap needs", async () => {
+    const datasets = await makeCollector().collectDatasets(config, false, {
+      checkboxFill: false,
+    });
+    expect(datasets[0].valueType).toBe("boolean");
+    expect(datasets[0].points).toHaveLength(3); // only a, b, c carry a value
+  });
+
+  test("a mixed property is not read as a checkbox", async () => {
+    const datasets = await makeCollector({
+      "Tasks/a.md": { done: true },
+      "Tasks/b.md": { done: "maybe" },
+    }).collectDatasets(config);
+    expect(datasets[0].valueType).toBe("text");
+    expect(datasets[0].points).toHaveLength(2);
+  });
+
+  test("a list of booleans counts as ticked when any element is true", async () => {
+    const datasets = await makeCollector({
+      "Tasks/a.md": { done: [false, true] },
+      "Tasks/b.md": { done: [false, false] },
+    }).collectDatasets(config);
+    expect(datasets[0].valueType).toBe("boolean");
+    expect(datasets[0].points.map((p) => p.value)).toEqual([1, 0, 0, 0, 0]);
+  });
+
+  test("the file limit counts the filled-in notes too", async () => {
+    const datasets = await makeCollector(fm, {
+      ...DEFAULT_SETTINGS,
+      fileLimit: 2,
+    }).collectDatasets(config);
+    expect(datasets[0].points).toHaveLength(2);
+    expect(datasets[0].truncated).toBe(true);
+    expect(datasets[0].totalCount).toBe(5);
+  });
+
+  test("the resolved type survives a cache invalidation", async () => {
+    const collector2 = makeCollector();
+    await collector2.collectDatasets(config);
+    collector2.clearPropertyCache("Tasks/a.md");
+    const datasets = await collector2.collectDatasets(config);
+    expect(datasets[0].valueType).toBe("boolean");
+    expect(datasets[0].points).toHaveLength(5);
+  });
+});

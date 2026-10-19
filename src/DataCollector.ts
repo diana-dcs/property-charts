@@ -8,8 +8,8 @@ import {
   PropertyValueType,
   RANGE_PRESET_DAYS,
   RangeConfig,
+  datasetsIgnoreRange,
   isInFolder,
-  isTextDatasets,
 } from "./types";
 
 /**
@@ -27,13 +27,39 @@ function readFrontmatterValue(
   return frontmatter[key];
 }
 
+/** Separates folder from property name in the property-type cache key. */
+const TYPE_KEY_SEP = "\u0000";
+
 /** Accepts the value types moment can parse; anything else is rejected upfront. */
 function isDateInput(value: unknown): value is string | number | Date {
   return typeof value === "string" || typeof value === "number" || value instanceof Date;
 }
 
+/**
+ * Whether a frontmatter value means "checkbox ticked". Only a real YAML boolean counts —
+ * a `"true"` string belongs to a text property, and such a property never reaches here
+ * because resolvePropertyType() would not call it boolean.
+ */
+function isCheckboxChecked(raw: unknown): boolean {
+  if (Array.isArray(raw)) return (raw as unknown[]).some((item) => item === true);
+  return raw === true;
+}
+
+export interface CollectOptions {
+  /**
+   * Whether a checkbox property is read as a closed set over the whole folder: every note
+   * that does not have the box ticked contributes a `false` point, including notes without
+   * the property and notes without frontmatter at all.
+   *
+   * Default. The heatmap turns it off: it draws one cell per dated note, so filling in
+   * thousands of unticked notes would say nothing the empty grid does not already say.
+   */
+  checkboxFill?: boolean;
+}
+
 export class DataCollector {
   private propertiesCache = new Map<string, string[]>();
+  private propertyTypeCache = new Map<string, PropertyValueType>();
   private dateCache = new Map<string, Date | null>();
 
   constructor(private app: App, private settings: PluginSettings) {}
@@ -45,11 +71,16 @@ export class DataCollector {
   clearPropertyCache(filePath?: string): void {
     if (!filePath) {
       this.propertiesCache.clear();
+      this.propertyTypeCache.clear();
       this.dateCache.clear();
       return;
     }
     for (const folder of this.propertiesCache.keys()) {
       if (isInFolder(filePath, folder)) this.propertiesCache.delete(folder);
+    }
+    for (const key of this.propertyTypeCache.keys()) {
+      const folder = key.slice(0, key.indexOf(TYPE_KEY_SEP));
+      if (isInFolder(filePath, folder)) this.propertyTypeCache.delete(key);
     }
     const datePrefix = filePath + ":";
     for (const key of this.dateCache.keys()) {
@@ -111,17 +142,29 @@ export class DataCollector {
     return result;
   }
 
-  collectDatasets(config: ChartConfig, limitOverride = false): Promise<Dataset[]> {
+  collectDatasets(
+    config: ChartConfig,
+    limitOverride = false,
+    options: CollectOptions = {},
+  ): Promise<Dataset[]> {
     const files = this.getFilesInFolder(config.folder);
     const limit = (!limitOverride && this.settings.fileLimit > 0)
       ? this.settings.fileLimit
       : Infinity;
 
+    // The type comes from every value of the property in the folder, not from the first
+    // note that happens to carry one: a single odd value used to retype a whole dataset.
     const datasets: Dataset[] = config.properties.map((prop) => ({
       property: prop,
       points: [],
-      valueType: "number",
+      valueType: this.resolvePropertyType(config.folder, prop, files),
     }));
+
+    // Which datasets read their property as a closed Checked/Unchecked set over the folder.
+    const fills = datasets.map(
+      (dataset) => options.checkboxFill !== false && dataset.valueType === "boolean",
+    );
+    const anyFill = fills.some(Boolean);
 
     const { from: fromStr, to: toStr } = this.resolveRange(config.range);
     const hasRangeFilter = fromStr !== null || toStr !== null;
@@ -132,19 +175,27 @@ export class DataCollector {
     for (const file of files) {
       const date = this.resolveDate(file, config.dateFormat);
 
+      let inRange = true;
       if (date) {
         // Dated file: apply the range filter.
         const dateStr = moment(date).format("YYYY-MM-DD");
-        if (fromStr && dateStr < fromStr) continue;
-        if (toStr && dateStr > toStr) continue;
+        if (fromStr && dateStr < fromStr) inRange = false;
+        if (toStr && dateStr > toStr) inRange = false;
       } else if (hasRangeFilter) {
         // Undated file: no temporal position — exclude whenever a range is active.
         // Only "all" (no filter) includes undated files.
-        continue;
+        inRange = false;
       }
 
+      // A filled checkbox dataset counts the whole folder, so the range cannot drop the
+      // note; without one, an out-of-range note still contributes nothing.
+      if (!inRange && !anyFill) continue;
+
       const cache = this.app.metadataCache.getFileCache(file);
-      if (!cache?.frontmatter) continue;
+      const frontmatter = cache?.frontmatter;
+      // A note without frontmatter is an unticked note for a checkbox dataset; for every
+      // other property it carries no value and is skipped before it consumes the limit.
+      if (!frontmatter && !anyFill) continue;
 
       if (collected >= limit) {
         truncated = true;
@@ -152,8 +203,25 @@ export class DataCollector {
       }
       collected++;
 
-      for (const dataset of datasets) {
-        const raw = readFrontmatterValue(cache.frontmatter, dataset.property);
+      for (const [i, dataset] of datasets.entries()) {
+        const fill = fills[i];
+        if (!fill && !inRange) continue;
+
+        const raw = frontmatter
+          ? readFrontmatterValue(frontmatter, dataset.property)
+          : undefined;
+
+        if (fill) {
+          const checked = isCheckboxChecked(raw);
+          dataset.points.push({
+            date,
+            label: file.basename,
+            rawValue: checked,
+            value: checked ? 1 : 0,
+          });
+          continue;
+        }
+
         if (raw === undefined || raw === null) continue;
 
         const point: DataPoint = {
@@ -163,11 +231,6 @@ export class DataCollector {
           value: this.normalizeValue(raw),
         };
         dataset.points.push(point);
-
-        // Infer value type from first non-null value
-        if (dataset.points.length === 1) {
-          dataset.valueType = this.inferValueType(raw);
-        }
       }
     }
 
@@ -208,13 +271,13 @@ export class DataCollector {
 
     // Text data found inside the range: the frequency chart ignores the range anyway, so
     // widen the collection to match the hidden range controls.
-    if (isTextDatasets(datasets)) {
+    if (datasetsIgnoreRange(datasets)) {
       if (unfiltered) return { datasets, isTextFallback: true };
       const all = await this.collectDatasets(
         { ...config, range: { preset: "all" } },
         limitOverride,
       );
-      return { datasets: isTextDatasets(all) ? all : datasets, isTextFallback: true };
+      return { datasets: datasetsIgnoreRange(all) ? all : datasets, isTextFallback: true };
     }
 
     if (datasets.some((d) => d.points.length > 0) || unfiltered) {
@@ -227,7 +290,7 @@ export class DataCollector {
       { ...config, range: { preset: "all" } },
       limitOverride,
     );
-    return isTextDatasets(fallback)
+    return datasetsIgnoreRange(fallback)
       ? { datasets: fallback, isTextFallback: true }
       : { datasets, isTextFallback: false };
   }
@@ -346,6 +409,60 @@ export class DataCollector {
       return null;
     }
     return null;
+  }
+
+  /**
+   * The value type of a property across a whole folder, memoized per folder+property.
+   * Invalidated together with the property list in clearPropertyCache().
+   */
+  private resolvePropertyType(
+    folder: string,
+    property: string,
+    files: TFile[],
+  ): PropertyValueType {
+    const key = folder + TYPE_KEY_SEP + property;
+    const cached = this.propertyTypeCache.get(key);
+    if (cached) return cached;
+
+    const result = this.computePropertyType(property, files);
+    this.propertyTypeCache.set(key, result);
+    return result;
+  }
+
+  /**
+   * Scans every value of the property in the folder. The type is only "boolean" when all
+   * of them are real YAML booleans — a mixed property must not be drawn as a checkbox,
+   * because the Unchecked bucket would then silently absorb unrelated values.
+   */
+  private computePropertyType(property: string, files: TFile[]): PropertyValueType {
+    let seen: PropertyValueType | null = null;
+
+    for (const file of files) {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!frontmatter) continue;
+
+      const raw = readFrontmatterValue(frontmatter, property);
+      for (const type of this.elementTypes(raw)) {
+        if (seen === null) {
+          seen = type;
+        } else if (seen !== type) {
+          // Mixed values: text wins over numbers, and a boolean mixed with anything is
+          // no longer a checkbox.
+          return seen === "text" || type === "text" ? "text" : "number";
+        }
+      }
+    }
+
+    return seen ?? "number";
+  }
+
+  /** The types a raw frontmatter value contributes — one per element for list properties. */
+  private elementTypes(raw: unknown): PropertyValueType[] {
+    if (raw === undefined || raw === null) return [];
+    const items = Array.isArray(raw) ? (raw as unknown[]) : [raw];
+    return items
+      .filter((item) => item !== undefined && item !== null)
+      .map((item) => this.inferValueType(item));
   }
 
   private inferValueType(raw: unknown): PropertyValueType {

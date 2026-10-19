@@ -167,6 +167,84 @@ export function isTextDatasets(datasets: Dataset[]): boolean {
 }
 
 /**
+ * The color list with the entry at `index` replaced, grown with the palette defaults when
+ * it is shorter than that.
+ *
+ * The regression this guards: the list is seeded with a single color (one per property),
+ * while a distribution chart has one entry per segment. A plain `map` cannot write past
+ * the end, so picking a color for any segment but the first was silently discarded — the
+ * Unchecked segment of a checkbox chart could never be recolored.
+ */
+export function withColorAt(
+  colors: readonly string[] | undefined,
+  index: number,
+  value: string,
+): string[] {
+  const length = Math.max(colors?.length ?? 0, index + 1);
+  return Array.from({ length }, (_, k) => (k === index ? value : colorAt(colors, k)));
+}
+
+/**
+ * Whether the collected data is drawn as a distribution of discrete values rather than
+ * plotted against time — text and checkbox properties both are, which also means the
+ * date range does not apply to them.
+ *
+ * Checkbox properties are collected over every note in the folder (see DataCollector),
+ * so the range would only drop undated notes out of a count that is meant to cover all
+ * of them.
+ */
+export function datasetsIgnoreRange(datasets: Dataset[]): boolean {
+  return (
+    datasets.some((d) => d.points.length > 0) &&
+    datasets.every((d) => d.valueType === "text" || d.valueType === "boolean")
+  );
+}
+
+/** Segment labels for a checkbox property, in the order they are drawn. */
+export const CHECKBOX_LABELS = {
+  checked: "Checked",
+  unchecked: "Unchecked",
+} as const;
+
+export const CHECKBOX_ORDER: readonly string[] = [
+  CHECKBOX_LABELS.checked,
+  CHECKBOX_LABELS.unchecked,
+];
+
+/**
+ * The labels and counts a distribution chart draws, in their final order.
+ *
+ * The single source of truth for segment order: the renderer and the sidebar's
+ * per-segment color pickers both read it, which they previously derived separately and
+ * could disagree about.
+ *
+ * A checkbox property gets the fixed Checked/Unchecked pair instead of whatever values
+ * happen to occur, so an all-true folder still shows an (empty) Unchecked segment and
+ * the percentages stay comparable between folders.
+ */
+export function buildDistribution(
+  dataset: Dataset,
+): { labels: string[]; counts: number[]; total: number } {
+  if (dataset.valueType === "boolean") {
+    let checked = 0;
+    for (const point of dataset.points) {
+      if (numericValue(point) === 1) checked++;
+    }
+    const counts = [checked, dataset.points.length - checked];
+    return { labels: [...CHECKBOX_ORDER], counts, total: dataset.points.length };
+  }
+
+  const freq = countValueFrequencies(dataset.points);
+  const rawKeys = [...freq.keys()].sort();
+  const counts = rawKeys.map((key) => freq.get(key) ?? 0);
+  return {
+    labels: rawKeys.map(stripWikiLinks),
+    counts,
+    total: counts.reduce((sum, value) => sum + value, 0),
+  };
+}
+
+/**
  * Counts how often each value occurs across the given points, expanding list properties
  * into one count per element.
  *
