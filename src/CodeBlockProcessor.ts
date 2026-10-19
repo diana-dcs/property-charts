@@ -150,7 +150,11 @@ export class CodeBlockProcessor {
           config.type !== "heatmap" && !isDistributionType(config.type);
         const datasets = isSeries
           ? (await this.collector.collectForSeries(collectConfig, limitOverride)).datasets
-          : await this.collector.collectDatasets(collectConfig, limitOverride);
+          : await this.collector.collectDatasets(collectConfig, limitOverride, {
+              // The heatmap draws one cell per dated note, so a checkbox property keeps
+              // its sparse reading there instead of filling the grid with unticked notes.
+              checkboxFill: config.type !== "heatmap",
+            });
         const hasData = datasets.some((d) => d.points.length > 0);
         if (!hasData && config.type !== "heatmap") {
           container.empty();

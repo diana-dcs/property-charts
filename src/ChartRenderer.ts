@@ -11,8 +11,7 @@ import {
   isDistributionType,
   colorAt,
   numericValue,
-  countValueFrequencies,
-  stripWikiLinks,
+  buildDistribution,
 } from "./types";
 import { toRgba, themeColorString } from "./color";
 import { renderHeatmap, renderHeatmapLegend, HEATMAP_WRAPPER_W, computeHeatmapDimensions } from "./HeatmapRenderer";
@@ -72,6 +71,13 @@ export class ChartRenderer {
     // ChartView, so there is nothing to draw here.
     const isTextOnly = datasets.every((d) => d.valueType === "text");
 
+    // Text and checkbox properties have no numeric axis to plot against: both are drawn
+    // as a frequency chart. A checkbox plotted as a 0/1 time series only ever showed a
+    // square wave, and said nothing about how many notes are ticked.
+    const isCategorical = datasets.every(
+      (d) => d.valueType === "text" || d.valueType === "boolean",
+    );
+
     if (config.type === "heatmap") {
       if (isTextOnly) return;
       await this.renderHeatmapChart(config, datasets);
@@ -81,7 +87,7 @@ export class ChartRenderer {
       this.renderDistributionChart(config, datasets, config.type);
       return;
     }
-    if (isTextOnly) {
+    if (isCategorical) {
       this.renderFrequencyChart(config, datasets);
     } else {
       this.renderTimeSeriesChart(config, datasets);
@@ -190,21 +196,24 @@ export class ChartRenderer {
   }
 
   private renderFrequencyChart(config: ChartConfig, datasets: Dataset[]): void {
-    const freqMaps = datasets.map((dataset) => countValueFrequencies(dataset.points));
+    // One distribution per dataset, then the union of their labels so several properties
+    // line up on the same axis. buildDistribution keeps a checkbox property on its fixed
+    // Checked/Unchecked pair.
+    const distributions = datasets.map((dataset) => buildDistribution(dataset));
 
-    const allValues = new Set<string>();
-    for (const freq of freqMaps) {
-      for (const value of freq.keys()) allValues.add(value);
+    const allLabels = new Set<string>();
+    for (const dist of distributions) {
+      for (const label of dist.labels) allLabels.add(label);
     }
-    const rawKeys = [...allValues].sort();
-    const labels = rawKeys.map(stripWikiLinks);
+    const labels = [...allLabels].sort();
 
     const chartDatasets: ChartDataset[] = datasets.map((dataset, i) => {
       const color = colorAt(config.colors, i);
-      const freq = freqMaps[i];
+      const dist = distributions[i];
+      const byLabel = new Map(dist?.labels.map((label, j) => [label, dist.counts[j] ?? 0]));
       return {
         label: dataset.property,
-        data: rawKeys.map((key) => freq?.get(key) ?? 0),
+        data: labels.map((label) => byLabel.get(label) ?? 0),
         backgroundColor: toRgba(color, 0.8),
         borderColor: toRgba(color, 1),
         borderWidth: 2,
@@ -234,12 +243,9 @@ export class ChartRenderer {
     const dataset = datasets[0];
     if (!dataset) return;
 
-    const freq = countValueFrequencies(dataset.points);
-
-    const rawKeys = [...freq.keys()].sort();
-    const labels = rawKeys.map(stripWikiLinks);
-    const data = rawKeys.map((key) => freq.get(key) ?? 0);
-    const total = data.reduce((sum, value) => sum + value, 0);
+    // Labels, order and total all come from buildDistribution, which ChartView's segment
+    // color pickers read as well — otherwise the pickers map to the wrong slices.
+    const { labels, counts: data, total } = buildDistribution(dataset);
 
     const isPolarArea = type === "polarArea";
     const bgAlpha = isPolarArea ? 0.6 : 0.85;

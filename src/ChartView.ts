@@ -9,12 +9,13 @@ import {
   CSS,
   CSS_VARS,
   PluginSettings,
+  buildDistribution,
   colorAt,
-  countValueFrequencies,
+  datasetsIgnoreRange,
   errorMessage,
   isDistributionType,
   isTextDatasets,
-  stripWikiLinks,
+  withColorAt,
   yearRange,
 } from "./types";
 import { computeHeatmapDimensions, HEATMAP_WRAPPER_W } from "./HeatmapRenderer";
@@ -379,7 +380,11 @@ export class ChartView extends ItemView {
     }
 
     if (isHeatmap || isDistribution) {
-      return this.collector.collectDatasets(collectConfig, this.limitOverride);
+      return this.collector.collectDatasets(collectConfig, this.limitOverride, {
+        // The heatmap draws one cell per dated note, so a checkbox property keeps its
+        // sparse reading there instead of filling the grid with unticked notes.
+        checkboxFill: !isHeatmap,
+      });
     }
 
     // Line/bar: text properties are drawn as a frequency chart, which ignores the range.
@@ -414,6 +419,13 @@ export class ChartView extends ItemView {
   ): void {
     const isTextProperty = textProbe ?? isTextDatasets(datasets);
 
+    // Checkbox properties are counted over the whole folder, so the range does not apply
+    // to them either — but unlike text they can still be drawn as a heatmap.
+    const ignoresRange = datasetsIgnoreRange(datasets);
+    const isCheckbox =
+      datasets.some((d) => d.points.length > 0) &&
+      datasets.every((d) => d.valueType === "boolean");
+
     const allPropsAreText = !isDistribution && isTextProperty;
 
     const hasAnyPoints = datasets.some((d) => d.points.length > 0);
@@ -426,10 +438,9 @@ export class ChartView extends ItemView {
     this.shape = { ...this.shape, isText: isTextProperty, hasDates };
 
     if (isDistribution && datasets[0]) {
-      // The segment order must match ChartRenderer's, which sorts the raw values before
-      // stripping wiki links — otherwise the color pickers map to the wrong slices.
-      const values = [...countValueFrequencies(datasets[0].points).keys()].sort();
-      this.rebuildSegmentColorSection(values.map(stripWikiLinks));
+      // Same source as ChartRenderer's slices, so the color pickers cannot drift out of
+      // step with the segment order.
+      this.rebuildSegmentColorSection(buildDistribution(datasets[0]).labels);
     } else {
       this.rebuildSegmentColorSection([]);
     }
@@ -437,6 +448,10 @@ export class ChartView extends ItemView {
     if (this.controlRefs) {
       const activeCount = this.activePropertyCount;
       updateHeatmapButton(this.controlRefs, activeCount, isTextProperty, hasDates);
+    }
+
+    if (!isHeatmap && !isDistribution && ignoresRange) {
+      this.shape = { ...this.shape, rangeApplies: false };
     }
 
     if (this.controlRefs && !isHeatmap && !isDistribution) {
@@ -450,6 +465,11 @@ export class ChartView extends ItemView {
         hint.show();
       } else if (!isHeatmap && !isDistribution && allPropsAreText) {
         hint.setText("Text values detected — showing as frequency chart instead of time series.");
+        hint.show();
+      } else if (!isHeatmap && isCheckbox) {
+        hint.setText(
+          "Checkbox property — every note in the folder is counted; notes without the box ticked count as Unchecked.",
+        );
         hint.show();
       } else {
         hint.hide();
@@ -537,7 +557,7 @@ export class ChartView extends ItemView {
       // preventing the picker from closing mid-selection.
       colorInput.onchange = handle(async () => {
         this.updateConfig({
-          colors: this.config.colors.map((c, k) => (k === i ? colorInput.value : c)),
+          colors: withColorAt(this.config.colors, i, colorInput.value),
         });
         await this.refresh();
       });
